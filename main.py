@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import json
 import random
 import sys
 from dataclasses import dataclass, field
@@ -66,6 +67,14 @@ CURSOR_PALETTE = (CYAN, (96, 255, 255), BLUE, PURPLE, WHITE)
 def asset_path(relative_path: str) -> Path:
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return root / relative_path
+
+
+def settings_path() -> Path:
+    if getattr(sys, "_MEIPASS", None):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return base / "settings.json"
 
 
 def load_font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -299,9 +308,10 @@ class Game:
         self.audio_rng = random.Random()
         self.cursor_rng = random.Random()
         self.running = True
-        self.mouse_raw = False
         self.mouse_sensitivity = 1.0
         self.aim_position = pygame.Vector2(WIDTH / 2, HEIGHT / 2)
+        self.mouse_sensitivity_editing = False
+        self.sensitivity_input_text = ""
         self.cursor_time = 0.0
         self.cursor_phase = 0.0
         self.cursor_trail: list[tuple[float, pygame.Vector2]] = []
@@ -399,6 +409,44 @@ class Game:
         else:
             self.effect_volumes[kind] = value
         self.apply_audio_volumes()
+
+    def load_settings(self) -> None:
+        try:
+            data = json.loads(settings_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            self.bgm_volume = max(0.0, min(1.0, float(data.get("bgm_volume", self.bgm_volume))))
+            self.sfx_volume = max(0.0, min(1.0, float(data.get("sfx_volume", self.sfx_volume))))
+            effects = data.get("effect_volumes")
+            if isinstance(effects, dict):
+                for key in self.effect_volumes:
+                    if key in effects:
+                        self.effect_volumes[key] = max(
+                            0.0, min(1.0, float(effects[key]))
+                        )
+            self.mouse_sensitivity = max(
+                0.1, min(5.0, float(data.get("mouse_sensitivity", self.mouse_sensitivity)))
+            )
+        except (TypeError, ValueError):
+            return
+
+    def save_settings(self) -> None:
+        data = {
+            "bgm_volume": self.bgm_volume,
+            "sfx_volume": self.sfx_volume,
+            "effect_volumes": dict(self.effect_volumes),
+            "mouse_sensitivity": self.mouse_sensitivity,
+        }
+        try:
+            settings_path().parent.mkdir(parents=True, exist_ok=True)
+            settings_path().write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     def play_shot_sound(self, fire_rate: float) -> None:
         if not self.audio_available or self.shot_sound is None:
@@ -888,19 +936,14 @@ class Game:
             pass
 
     def sync_mouse_mode(self) -> None:
-        """Hide the OS cursor in game and enable raw relative mode when requested."""
+        """Hide the OS cursor in game and enable raw relative mouse mode."""
         if self.mode == Mode.PLAYING:
-            if self.mouse_raw:
-                try:
-                    pygame.mouse.set_relative_mode(True)
-                    pygame.mouse.set_visible(False)
-                    if self.aim_position.x == 0 and self.aim_position.y == 0:
-                        self.aim_position = self.player + pygame.Vector2(0, -170)
-                    pygame.mouse.get_rel()
-                except pygame.error:
-                    self._disable_relative_mouse()
-                    pygame.mouse.set_visible(False)
-            else:
+            try:
+                pygame.mouse.set_relative_mode(True)
+                if self.aim_position.x == 0 and self.aim_position.y == 0:
+                    self.aim_position = self.player + pygame.Vector2(0, -170)
+                pygame.mouse.get_rel()
+            except pygame.error:
                 self._disable_relative_mouse()
                 pygame.mouse.set_visible(False)
             return
@@ -908,7 +951,7 @@ class Game:
         pygame.mouse.set_visible(True)
 
     def current_mouse_position(self) -> pygame.Vector2:
-        if self.mode == Mode.PLAYING and self.mouse_raw and pygame.mouse.get_relative_mode():
+        if self.mode == Mode.PLAYING and pygame.mouse.get_relative_mode():
             return self.aim_position.copy()
         return pygame.Vector2(pygame.mouse.get_pos())
 
@@ -920,9 +963,28 @@ class Game:
             max(0.1, min(5.0, self.mouse_sensitivity + direction * 0.1)), 1
         )
 
-    def toggle_mouse_raw(self) -> None:
-        self.mouse_raw = not self.mouse_raw
-        self.sync_mouse_mode()
+    def begin_mouse_sensitivity_edit(self) -> None:
+        self.mouse_sensitivity_editing = True
+        self.sensitivity_input_text = f"{self.mouse_sensitivity:g}"
+
+    def commit_mouse_sensitivity(self) -> None:
+        try:
+            value = float(self.sensitivity_input_text.strip())
+        except ValueError:
+            value = self.mouse_sensitivity
+        self.mouse_sensitivity = round(max(0.1, min(5.0, value)), 1)
+        self.mouse_sensitivity_editing = False
+        self.sensitivity_input_text = ""
+
+    @staticmethod
+    def _digit_key_char(key: int) -> str | None:
+        if pygame.K_0 <= key <= pygame.K_9:
+            return chr(key)
+        if pygame.K_KP0 <= key <= pygame.K_KP9:
+            return str(key - pygame.K_KP0)
+        if key in (pygame.K_PERIOD, pygame.K_KP_PERIOD):
+            return "."
+        return None
 
     def update_cursor_effects(self, dt: float, position: pygame.Vector2) -> None:
         self.cursor_time += dt
@@ -1192,6 +1254,33 @@ class Game:
         if event.type == pygame.QUIT:
             self.running = False
             return
+
+        if self.mouse_sensitivity_editing:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.mouse_sensitivity_editing = False
+                    self.sensitivity_input_text = ""
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.commit_mouse_sensitivity()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.sensitivity_input_text = self.sensitivity_input_text[:-1]
+                else:
+                    char = self._digit_key_char(event.key)
+                    if char is not None:
+                        if char == ".":
+                            if not self.sensitivity_input_text:
+                                self.sensitivity_input_text = "0."
+                            elif "." not in self.sensitivity_input_text:
+                                self.sensitivity_input_text += "."
+                        else:
+                            self.sensitivity_input_text += char
+                return
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if not self.settings_mouse_sensitivity_value_rect().collidepoint(event.pos):
+                    self.commit_mouse_sensitivity()
+                else:
+                    return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.mode == Mode.MAIN_MENU:
                 for index, destination in enumerate((Mode.PLAYING, Mode.TUTORIAL, Mode.SETTINGS)):
@@ -1216,8 +1305,8 @@ class Game:
                 if self.settings_mouse_sensitivity_button_rect(1).collidepoint(event.pos):
                     self.adjust_mouse_sensitivity(1)
                     return
-                if self.settings_mouse_raw_toggle_rect().collidepoint(event.pos):
-                    self.toggle_mouse_raw()
+                if self.settings_mouse_sensitivity_value_rect().collidepoint(event.pos):
+                    self.begin_mouse_sensitivity_edit()
                     return
                 for index, (kind, _) in enumerate(self.settings_volume_rows()):
                     for direction in (-1, 1):
@@ -1228,7 +1317,9 @@ class Game:
                 return
         if event.type == pygame.MOUSEBUTTONDOWN and self.mode == Mode.PAUSED:
             if event.button == 1:
-                if self.pause_restart_rect().collidepoint(event.pos):
+                if self.pause_main_menu_rect().collidepoint(event.pos):
+                    self.abandon_run_to_main_menu()
+                elif self.pause_restart_rect().collidepoint(event.pos):
                     self.reset_run()
                 else:
                     for kind in ("sfx", "bgm"):
@@ -1245,6 +1336,12 @@ class Game:
             return
         if event.type != pygame.KEYDOWN:
             return
+        if self.mode == Mode.SETTINGS:
+            char = self._digit_key_char(event.key)
+            if char is not None:
+                self.begin_mouse_sensitivity_edit()
+                self.sensitivity_input_text = "0." if char == "." else char
+                return
         if event.key == pygame.K_ESCAPE:
             if self.mode in (Mode.TUTORIAL, Mode.SETTINGS):
                 self.mode = Mode.MAIN_MENU
@@ -1314,7 +1411,7 @@ class Game:
         self.player.x = max(self.player_radius, min(WIDTH - self.player_radius, self.player.x))
         self.player.y = max(PLAY_TOP + self.player_radius, min(HEIGHT - self.player_radius, self.player.y))
         self.update_still_time(dt, moving)
-        if self.mouse_raw and pygame.mouse.get_relative_mode():
+        if pygame.mouse.get_relative_mode():
             rel = pygame.mouse.get_rel()
             self.aim_position += pygame.Vector2(rel[0], rel[1]) * self.mouse_sensitivity
             self.aim_position.x = max(0, min(WIDTH, self.aim_position.x))
@@ -1904,6 +2001,10 @@ class Game:
         self.death_reason = reason
         self.sync_mouse_mode()
 
+    def abandon_run_to_main_menu(self) -> None:
+        self.mode = Mode.MAIN_MENU
+        self.sync_mouse_mode()
+
     def draw(self) -> None:
         self.screen.fill(BG)
         if self.mode == Mode.MAIN_MENU:
@@ -1959,15 +2060,15 @@ class Game:
 
     @staticmethod
     def settings_audio_y(index: int) -> int:
-        return 300 + index * 42
+        return 250 + index * 42
 
     @staticmethod
     def settings_mouse_sensitivity_button_rect(direction: int) -> pygame.Rect:
         return pygame.Rect(810 if direction < 0 else 1055, 152, 48, 42)
 
     @staticmethod
-    def settings_mouse_raw_toggle_rect() -> pygame.Rect:
-        return pygame.Rect(1055, 212, 48, 42)
+    def settings_mouse_sensitivity_value_rect() -> pygame.Rect:
+        return pygame.Rect(885, 152, 150, 42)
 
     def preview_volume(self, kind: str) -> None:
         if kind == "bgm":
@@ -2041,7 +2142,7 @@ class Game:
     def draw_settings(self) -> None:
         self.draw_menu_background()
         self.blit_text("设置", (55, 40), WHITE, self.font_large)
-        self.blit_text("鼠标灵敏度步进 0.1；原始输入在游戏内生效", (58, 105), MUTED, self.font_small)
+        self.blit_text("鼠标灵敏度范围 0.1–5.0，点击数字后可直接键盘输入", (58, 105), MUTED, self.font_small)
 
         sensitivity_rect = pygame.Rect(270, 145, 850, 52)
         pygame.draw.rect(self.screen, PANEL, sensitivity_rect, border_radius=8)
@@ -2052,18 +2153,17 @@ class Game:
         pygame.draw.rect(self.screen, GRID, sensitivity_plus, border_radius=7)
         self.blit_text("-", (sensitivity_minus.x + 17, sensitivity_minus.y + 5), WHITE, self.font)
         self.blit_text("+", (sensitivity_plus.x + 13, sensitivity_plus.y + 5), WHITE, self.font)
-        sensitivity = self.font.render(f"{self.mouse_sensitivity:.1f}×", True, CYAN)
-        self.screen.blit(sensitivity, sensitivity.get_rect(center=(955, sensitivity_rect.centery)))
+        value_rect = self.settings_mouse_sensitivity_value_rect()
+        pygame.draw.rect(self.screen, (14, 20, 32), value_rect, border_radius=7)
+        if self.mouse_sensitivity_editing:
+            pygame.draw.rect(self.screen, CYAN, value_rect, 2, border_radius=7)
+            text = self.sensitivity_input_text + "|"
+        else:
+            text = f"{self.mouse_sensitivity:g}"
+        sensitivity = self.font.render(text, True, CYAN)
+        self.screen.blit(sensitivity, sensitivity.get_rect(center=value_rect.center))
 
-        raw_rect = pygame.Rect(270, 205, 850, 52)
-        pygame.draw.rect(self.screen, PANEL, raw_rect, border_radius=8)
-        self.blit_text("原始鼠标输入", (raw_rect.x + 22, raw_rect.y + 13), WHITE, self.font_small)
-        raw_toggle = self.settings_mouse_raw_toggle_rect()
-        pygame.draw.rect(self.screen, GREEN if self.mouse_raw else GRID, raw_toggle, border_radius=7)
-        raw_label = self.font_small.render("开" if self.mouse_raw else "关", True, WHITE)
-        self.screen.blit(raw_label, raw_label.get_rect(center=raw_toggle.center))
-
-        self.blit_text("声音", (58, 275), WHITE, self.font_small)
+        self.blit_text("声音", (58, 225), WHITE, self.font_small)
         for index, (kind, label) in enumerate(self.settings_volume_rows()):
             y = self.settings_audio_y(index)
             rect = pygame.Rect(270, y, 850, 52)
@@ -2297,7 +2397,11 @@ class Game:
 
     @staticmethod
     def pause_restart_rect() -> pygame.Rect:
-        return pygame.Rect(WIDTH // 2 - 125, 575, 250, 58)
+        return pygame.Rect(WIDTH // 2 - 260, 575, 250, 58)
+
+    @staticmethod
+    def pause_main_menu_rect() -> pygame.Rect:
+        return pygame.Rect(WIDTH // 2 + 10, 575, 250, 58)
 
     @staticmethod
     def pause_volume_button_rect(kind: str, direction: int) -> pygame.Rect:
@@ -2351,10 +2455,18 @@ class Game:
         restart_label = self.font.render("重新开始  R", True, WHITE)
         self.screen.blit(restart_label, restart_label.get_rect(center=restart.center))
 
+        main_menu = self.pause_main_menu_rect()
+        pygame.draw.rect(self.screen, GRID, main_menu, border_radius=10)
+        pygame.draw.rect(self.screen, MUTED, main_menu, 2, border_radius=10)
+        main_menu_label = self.font.render("返回主菜单", True, WHITE)
+        self.screen.blit(main_menu_label, main_menu_label.get_rect(center=main_menu.center))
+
     def blit_text(self, text: str, position: tuple[int, int] | pygame.Vector2, color: tuple[int, int, int], font: pygame.font.Font) -> None:
         self.screen.blit(font.render(text, True, color), position)
 
     def run(self) -> None:
+        self.load_settings()
+        self.apply_audio_volumes()
         try:
             while self.running:
                 dt = min(self.clock.tick(FPS) / 1000.0, 0.05)
@@ -2363,6 +2475,7 @@ class Game:
                 self.update(dt)
                 self.draw()
         finally:
+            self.save_settings()
             self._disable_relative_mouse()
             pygame.mouse.set_visible(True)
             pygame.quit()
