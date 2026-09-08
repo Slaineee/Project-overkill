@@ -1,0 +1,7 @@
+﻿logged_at,run_id,world,elapsed_seconds,start_population,final_population,start_base_damage,final_base_damage,start_shot_damage,final_shot_damage,start_fire_rate,final_fire_rate,start_volley_multiplier,final_volley_multiplier,start_dps,final_dps,dps_growth,gold_before_reward,enemy_kills,cards
+20260907-233904-290509,20260907-233715-164443,1,109.133,1,603,10.0,10.0,10.0,6030.0,8.0,8.0,1.0,1.0,80.0,48240.0,603.0,9,75,
+20260908-165218-910252,20260908-165032-045066,1,105.283,1,425,10.0,10.0,10.0,4250.0,8.0,8.0,1.0,1.0,80.0,34000.0,425.0,14,73,
+20260908-165408-978351,20260908-165032-045066,2,99.111,1,1809,13.0,13.0,13.0,23517.0,8.8,8.8,1.0,1.0,114.4,206949.6,1809.0,35,81,damage+fire_rate;splash
+20260908-165607-661015,20260908-165032-045066,3,98.858,1,6753,13.0,13.0,13.0,87789.0,8.8,8.8,1.0,1.0,185.9,1255382.7,6753.0,59,93,damage+fire_rate;splash;recruit_gate_bias;critical_chance;critical_power
+20260908-165806-128885,20260908-165032-045066,4,99.136,11,7641,13.0,13.0,143.0,99333.0,9.68,9.68,1.0,1.0,2249.39,1562508.09,694.6364,32,110,damage+fire_rate;recruit_gate_bias;critical_chance;critical_power;ricochet_2
+20260908-170014-819179,20260908-165032-045066,5,95.487,11,46479,14.0,14.0,154.0,650706.0,10.56,10.56,1.0,1.0,3659.04,15460774.56,4225.3636,37,132,damage+fire_rate;recruit_gate_bias;critical_power;ricochet_3+fire_rate;critical_focus
