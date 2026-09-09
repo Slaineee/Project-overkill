@@ -5,6 +5,7 @@ import os
 import json
 import random
 import sys
+from itertools import count
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -15,6 +16,7 @@ from balance_log import append_world_balance_log, create_run_id
 from cards import (
     CARDS,
     CARD_BY_KEY,
+    CATEGORY_SPECS,
     TARGET_BOSS,
     TARGET_ELITE,
     TARGET_GATE,
@@ -62,6 +64,11 @@ CURSOR_TRAIL_MAX_AGE = 0.42
 CURSOR_TRAIL_CAP = 30
 CURSOR_PARTICLE_CAP = 140
 CURSOR_PALETTE = (CYAN, (96, 255, 255), BLUE, PURPLE, WHITE)
+OVERLOAD = (255, 55, 70)
+OVERLOAD_CHANCE = 0.05
+OVERLOAD_EXCHANGE_COST = 5
+OVERLOAD_SALE_PRICE = 20
+_owned_card_ids = count(1)
 
 
 def asset_path(relative_path: str) -> Path:
@@ -272,6 +279,8 @@ class OwnedCard:
     acquired_world: int
     wholesale_purchase: bool = False
     wholesale_sale_price: int | None = None
+    acquired_shop_round: int = 0
+    instance_id: int = field(default_factory=lambda: next(_owned_card_ids))
 
 
 @dataclass
@@ -285,8 +294,14 @@ class EffectRuntime:
 
 @dataclass(frozen=True)
 class ShopOffer:
-    card: Card
+    card: Card | None = None
     enhancement: str = ""
+    overload_category: str = ""
+    exchange_value: int = 0
+
+    @property
+    def is_overload(self) -> bool:
+        return bool(self.overload_category)
 
 
 class Game:
@@ -312,6 +327,9 @@ class Game:
         self.aim_position = pygame.Vector2(WIDTH / 2, HEIGHT / 2)
         self.mouse_sensitivity_editing = False
         self.sensitivity_input_text = ""
+        self.dev_panel_open = False
+        self.dev_editing_field: str | None = None
+        self.dev_input_text = ""
         self.cursor_time = 0.0
         self.cursor_phase = 0.0
         self.cursor_trail: list[tuple[float, pygame.Vector2]] = []
@@ -493,7 +511,8 @@ class Game:
         self.total_kills = 0
         self.rapid_reload_kills = 0
         self.equipped_cards: list[OwnedCard] = []
-        self.effect_runtime: dict[tuple[str, int], EffectRuntime] = {}
+        self.overload_cards: list[OwnedCard] = []
+        self.effect_runtime: dict[tuple[int, int], EffectRuntime] = {}
         self.attribute_purchases = {"population": 0, "damage": 0, "fire_rate": 0}
         self.default_population = 1
         self.default_damage = 10.0
@@ -501,6 +520,10 @@ class Game:
         self.shop_offers: list[ShopOffer] = []
         self.refresh_cost = 0
         self.detail_card: OwnedCard | None = None
+        self.shop_round = 0
+        self.card_page = "normal"
+        self.dragging_card: OwnedCard | None = None
+        self.dragging_from = ""
         self.death_reason = ""
         self.start_world()
 
@@ -561,7 +584,7 @@ class Game:
         target: int | None = None,
         trigger: str | None = None,
     ):
-        for owned in self.equipped_cards:
+        for owned in self.all_owned_cards():
             for index, effect in enumerate(CARD_BY_KEY[owned.key].effects):
                 if action is not None and effect.action != action:
                     continue
@@ -574,13 +597,16 @@ class Game:
                 yield owned, index, effect
 
     def effect_state(self, owned: OwnedCard, index: int) -> EffectRuntime:
-        return self.effect_runtime.setdefault((owned.key, index), EffectRuntime())
+        return self.effect_runtime.setdefault((owned.instance_id, index), EffectRuntime())
+
+    def all_owned_cards(self) -> tuple[OwnedCard, ...]:
+        return tuple(self.equipped_cards) + tuple(self.overload_cards)
 
     def owned_card(self, key: str) -> OwnedCard | None:
-        return next((owned for owned in self.equipped_cards if owned.key == key), None)
+        return next((owned for owned in self.all_owned_cards() if owned.key == key), None)
 
-    def growth_level(self, key: str) -> int:
-        owned = self.owned_card(key)
+    def growth_level(self, card: str | OwnedCard) -> int:
+        owned = card if isinstance(card, OwnedCard) else self.owned_card(card)
         return max(1, self.world - owned.acquired_world) if owned else 0
 
     def state_value(self, name: str) -> float:
@@ -637,7 +663,7 @@ class Game:
 
         value = float(effect.parameters.get("value", 0.0))
         if effect.action == "growth_modifier":
-            value *= self.growth_level(owned.key)
+            value *= self.growth_level(owned)
         if "scale_stat" in effect.parameters:
             step = max(0.000001, float(effect.parameters.get("step", 1.0)))
             steps = math.floor(self.state_value(str(effect.parameters["scale_stat"])) / step)
@@ -767,7 +793,7 @@ class Game:
             return 0
         current = self.gold if effect.stat == "gold" else self.population
         value = float(effect.parameters.get("value", 0.0))
-        value += self.growth_level(owned.key) * float(effect.parameters.get("per_world", 0.0))
+        value += self.growth_level(owned) * float(effect.parameters.get("per_world", 0.0))
         if effect.operator == "add_percent":
             amount = math.floor(current * value)
         else:
@@ -811,6 +837,10 @@ class Game:
                 continue
             if not self.effect_event_ready(owned, index, effect, event_target):
                 continue
+            message = effect.parameters.get("message")
+            if isinstance(message, str) and message:
+                self.message = message
+                self.message_timer = 2.0
             if effect.action == "grant_resource":
                 changes[effect.stat] += self.apply_resource_effect(owned, effect)
             elif effect.action in {"modify_stat", "growth_modifier"}:
@@ -986,6 +1016,244 @@ class Game:
             return "."
         return None
 
+    def toggle_dev_panel(self) -> None:
+        self.dev_panel_open = not self.dev_panel_open
+        self.dev_editing_field = None
+        self.dev_input_text = ""
+        if self.dev_panel_open:
+            self._disable_relative_mouse()
+            pygame.mouse.set_visible(True)
+        else:
+            self.sync_mouse_mode()
+
+    def dev_field_specs(self) -> tuple[tuple[str, str, bool, float, float, float, str], ...]:
+        return (
+            ("gold", "金币", True, 0, 999_999_999, 100, "int"),
+            ("population", "人口 / 血量", True, 1, 999_999_999, 100, "int"),
+            ("default_population", "初始人口", True, 1, 999, 1, "int"),
+            ("default_damage", "基础伤害", False, 0.0, 9_999.0, 1.0, "float"),
+            ("default_fire_rate", "基础射速", False, 0.0, 9_999.0, 1.0, "float"),
+            ("world", "世界", True, 1, 8, 1, "int"),
+            ("elapsed", "关卡秒数", False, 0.0, WORLD_DURATION, 5.0, "float"),
+        )
+
+    def dev_value(self, key: str) -> float:
+        return float(
+            {
+                "gold": self.gold,
+                "population": self.population,
+                "default_population": self.default_population,
+                "default_damage": self.default_damage,
+                "default_fire_rate": self.default_fire_rate,
+                "world": self.world,
+                "elapsed": self.elapsed,
+            }[key]
+        )
+
+    def dev_set_value(self, key: str, value: float) -> None:
+        if key == "gold":
+            self.gold = int(round(value))
+        elif key == "population":
+            self.population = int(round(value))
+            self.population_peak = max(self.population_peak, self.population)
+        elif key == "default_population":
+            self.default_population = int(round(value))
+        elif key == "default_damage":
+            self.default_damage = round(value, 2)
+        elif key == "default_fire_rate":
+            self.default_fire_rate = round(value, 2)
+        elif key == "world":
+            self.world = int(round(value))
+        elif key == "elapsed":
+            self.elapsed = round(value, 2)
+
+    def dev_format_value(self, key: str, value: float, kind: str) -> str:
+        if kind == "int":
+            return f"{int(round(value)):,}"
+        return f"{value:.1f}"
+
+    def dev_raw_value_text(self, key: str) -> str:
+        return f"{self.dev_value(key):g}"
+
+    def dev_begin_edit(self, key: str) -> None:
+        self.dev_editing_field = key
+        self.dev_input_text = self.dev_raw_value_text(key)
+
+    def dev_commit_edit(self) -> None:
+        if self.dev_editing_field is None:
+            return
+        key = self.dev_editing_field
+        spec = next(spec for spec in self.dev_field_specs() if spec[0] == key)
+        _, _, is_int, minimum, maximum, _, _ = spec
+        try:
+            value = float(self.dev_input_text.strip())
+        except ValueError:
+            value = self.dev_value(key)
+        if is_int:
+            value = round(value)
+        value = max(minimum, min(maximum, value))
+        self.dev_set_value(key, value)
+        self.dev_editing_field = None
+        self.dev_input_text = ""
+
+    def dev_step_value(self, key: str, direction: int) -> None:
+        spec = next(spec for spec in self.dev_field_specs() if spec[0] == key)
+        _, _, is_int, minimum, maximum, step, _ = spec
+        value = self.dev_value(key) + direction * step
+        if is_int:
+            value = round(value)
+        value = max(minimum, min(maximum, value))
+        self.dev_set_value(key, value)
+
+    def dev_skip_to_shop(self) -> None:
+        if self.world >= 8:
+            self.mode = Mode.VICTORY
+            self.sync_mouse_mode()
+        else:
+            self.enter_shop()
+
+    def dev_clear_enemies(self) -> None:
+        self.enemies.clear()
+        self.bosses.clear()
+        self.gates.clear()
+        self.enemy_bullets.clear()
+
+    @staticmethod
+    def dev_panel_rect() -> pygame.Rect:
+        return pygame.Rect(160, 30, 960, 690)
+
+    @staticmethod
+    def dev_field_value_rect(index: int) -> pygame.Rect:
+        return pygame.Rect(460, 128 + index * 58, 260, 42)
+
+    @staticmethod
+    def dev_field_button_rect(index: int, direction: int) -> pygame.Rect:
+        return pygame.Rect(740 if direction < 0 else 800, 128 + index * 58, 46, 42)
+
+    @staticmethod
+    def dev_action_button_rect(row: int, column: int) -> pygame.Rect:
+        widths = (300, 210, 160, 150) if row == 0 else (200, 200, 180, 240)
+        x = 220
+        gap = 20
+        for index in range(column):
+            x += widths[index] + gap
+        return pygame.Rect(x, 522 + row * 66, widths[column], 52)
+
+    def handle_dev_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_F1):
+                self.toggle_dev_panel()
+                return
+            if self.dev_editing_field is not None:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.dev_commit_edit()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.dev_input_text = self.dev_input_text[:-1]
+                else:
+                    char = self._digit_key_char(event.key)
+                    if char is not None:
+                        if char == "." and "." in self.dev_input_text:
+                            return
+                        self.dev_input_text += char
+                return
+            return
+
+        if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
+            return
+
+        specs = self.dev_field_specs()
+        value_rects = [self.dev_field_value_rect(index) for index in range(len(specs))]
+        if self.dev_editing_field is not None and not any(
+            rect.collidepoint(event.pos) for rect in value_rects
+        ):
+            self.dev_commit_edit()
+
+        for index, spec in enumerate(specs):
+            if self.dev_field_value_rect(index).collidepoint(event.pos):
+                self.dev_begin_edit(spec[0])
+                return
+            if self.dev_field_button_rect(index, -1).collidepoint(event.pos):
+                self.dev_step_value(spec[0], -1)
+                return
+            if self.dev_field_button_rect(index, 1).collidepoint(event.pos):
+                self.dev_step_value(spec[0], 1)
+                return
+
+        if self.dev_action_button_rect(0, 0).collidepoint(event.pos):
+            self.dev_skip_to_shop()
+        elif self.dev_action_button_rect(0, 1).collidepoint(event.pos):
+            self.dev_clear_enemies()
+        elif self.dev_action_button_rect(0, 2).collidepoint(event.pos):
+            self.gold += 10_000
+        elif self.dev_action_button_rect(0, 3).collidepoint(event.pos):
+            self.population += 10_000
+            self.population_peak = max(self.population_peak, self.population)
+        elif self.dev_action_button_rect(1, 0).collidepoint(event.pos):
+            self.default_damage += 100.0
+        elif self.dev_action_button_rect(1, 1).collidepoint(event.pos):
+            self.default_fire_rate += 10.0
+        elif self.dev_action_button_rect(1, 2).collidepoint(event.pos):
+            self.world = min(8, self.world + 1)
+        elif self.dev_action_button_rect(1, 3).collidepoint(event.pos):
+            self.toggle_dev_panel()
+
+    def draw_dev_panel(self) -> None:
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((5, 7, 12, 215))
+        self.screen.blit(shade, (0, 0))
+
+        panel = self.dev_panel_rect()
+        pygame.draw.rect(self.screen, PANEL, panel, border_radius=16)
+        pygame.draw.rect(self.screen, CYAN, panel, 3, border_radius=16)
+
+        self.blit_text("开发者测试面板", (panel.x + 40, panel.y + 22), WHITE, self.font_large)
+        self.blit_text("点击数值可直接输入，± 按钮步进调整；F1 / Esc 关闭", (panel.x + 40, panel.y + 70), MUTED, self.font_small)
+
+        for index, spec in enumerate(self.dev_field_specs()):
+            key, label, _, _, _, _, kind = spec
+            y = 128 + index * 58
+            self.blit_text(label, (panel.x + 40, y + 8), WHITE, self.font_small)
+            value_rect = self.dev_field_value_rect(index)
+            pygame.draw.rect(self.screen, GRID, value_rect, border_radius=8)
+            if self.dev_editing_field == key:
+                pygame.draw.rect(self.screen, YELLOW, value_rect, 2, border_radius=8)
+                display = self.dev_input_text + ("_" if (pygame.time.get_ticks() // 500) % 2 == 0 else "")
+            else:
+                display = self.dev_format_value(key, self.dev_value(key), kind)
+            value_surface = self.font_small.render(display, True, WHITE)
+            self.screen.blit(value_surface, (value_rect.x + 12, value_rect.y + 9))
+            for direction in (-1, 1):
+                button_rect = self.dev_field_button_rect(index, direction)
+                pygame.draw.rect(self.screen, GRID, button_rect, border_radius=8)
+                pygame.draw.rect(self.screen, MUTED, button_rect, 2, border_radius=8)
+                text = "-" if direction < 0 else "+"
+                label_surface = self.font.render(text, True, CYAN)
+                self.screen.blit(label_surface, label_surface.get_rect(center=button_rect.center))
+
+        action_specs = (
+            ("结束本世界 → 商店", GREEN, 0, 0),
+            ("清空场上敌人", BLUE, 0, 1),
+            ("金币 +10,000", YELLOW, 0, 2),
+            ("人口 +10,000", CYAN, 0, 3),
+            ("伤害 +100", ORANGE, 1, 0),
+            ("射速 +10", PURPLE, 1, 1),
+            ("世界 +1", WHITE, 1, 2),
+            ("关闭面板", RED, 1, 3),
+        )
+        for text, color, row, column in action_specs:
+            rect = self.dev_action_button_rect(row, column)
+            pygame.draw.rect(self.screen, GRID, rect, border_radius=10)
+            pygame.draw.rect(self.screen, color, rect, 2, border_radius=10)
+            label_surface = self.font_small.render(text, True, color)
+            self.screen.blit(label_surface, label_surface.get_rect(center=rect.center))
+
+        readout = (
+            f"当前伤害 {self.current_damage():.1f}  |  "
+            f"当前射速 {self.current_fire_rate():.1f}/s  |  "
+            f"理论DPS {format_number(self.current_dps())}"
+        )
+        self.blit_text(readout, (panel.x + 40, panel.bottom - 46), CYAN, self.font_small)
+
     def update_cursor_effects(self, dt: float, position: pygame.Vector2) -> None:
         self.cursor_time += dt
         self.cursor_phase += dt
@@ -1146,7 +1414,7 @@ class Game:
         start_dps = float(start["dps"])
         cards = ";".join(
             f"{owned.key}{'+' + owned.enhancement if owned.enhancement else ''}"
-            for owned in self.equipped_cards
+            for owned in self.all_owned_cards()
         )
         record = {
             "logged_at": create_run_id(),
@@ -1281,6 +1549,10 @@ class Game:
                 else:
                     return
 
+        if self.dev_panel_open:
+            self.handle_dev_event(event)
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.mode == Mode.MAIN_MENU:
                 for index, destination in enumerate((Mode.PLAYING, Mode.TUTORIAL, Mode.SETTINGS)):
@@ -1328,11 +1600,15 @@ class Game:
                                 self.adjust_volume(kind, direction)
                                 return
             return
-        if event.type == pygame.MOUSEBUTTONDOWN and self.mode == Mode.SHOP:
+        if self.mode == Mode.SHOP and event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
-                self.handle_shop_click(event.pos)
+                self.handle_shop_mouse_down(event.pos)
             elif event.button == 3:
                 self.handle_shop_detail(event.pos)
+            return
+        if self.mode == Mode.SHOP and event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                self.handle_shop_mouse_up(event.pos)
             return
         if event.type != pygame.KEYDOWN:
             return
@@ -1342,6 +1618,9 @@ class Game:
                 self.begin_mouse_sensitivity_edit()
                 self.sensitivity_input_text = "0." if char == "." else char
                 return
+        if event.key == pygame.K_F1:
+            self.toggle_dev_panel()
+            return
         if event.key == pygame.K_ESCAPE:
             if self.mode in (Mode.TUTORIAL, Mode.SETTINGS):
                 self.mode = Mode.MAIN_MENU
@@ -1362,6 +1641,8 @@ class Game:
             self.start_world()
 
     def update(self, dt: float) -> None:
+        if self.dev_panel_open:
+            return
         self.update_audio(dt)
         if self.mode != Mode.PLAYING:
             return
@@ -1523,7 +1804,8 @@ class Game:
             self.enemy_timer = interval
         if self.elite_timer <= 0:
             self.spawn_enemy(True)
-            self.elite_timer = max(8.0, 18.0 - (self.world - 1) * 1.45)
+            base_elite_interval = max(8.0, 18.0 - (self.world - 1) * 1.45)
+            self.elite_timer = max(3.0, self.apply_stat(base_elite_interval, "elite_spawn_interval", TARGET_PLAYER))
         if self.gate_timer <= 0 and not any(g.kind == "number" for g in self.gates):
             self.spawn_number_gate()
             self.gate_timer = self.rng.uniform(8.0, 11.0)
@@ -1712,6 +1994,14 @@ class Game:
         amount = max(1, math.ceil(max(0, self.population) * max(0.0, ratio)))
         return self.lose_population(amount)
 
+    def contact_avoid_chance(self, target: int) -> float:
+        stat = {
+            TARGET_NORMAL: "contact_avoid_chance",
+            TARGET_ELITE: "elite_contact_avoid_chance",
+            TARGET_BOSS: "boss_contact_avoid_chance",
+        }[target]
+        return max(0.0, min(1.0, self.apply_stat(0.0, stat, target)))
+
     def update_enemies(self, dt: float) -> None:
         for enemy in self.enemies[:]:
             if enemy.hp <= 0:
@@ -1732,11 +2022,9 @@ class Game:
                     enemy.shoot_timer = self.rng.uniform(2.8, 4.0)
             if enemy.position.distance_to(self.player) <= enemy.radius + self.player_radius:
                 loss_ratio = 0.12 if enemy.elite else 0.02
-                contact_chance = max(
-                    0.0,
-                    min(1.0, self.apply_stat(0.0, "contact_avoid_chance", TARGET_NORMAL)),
-                )
-                if not enemy.elite and contact_chance and self.rng.random() < contact_chance:
+                target = TARGET_ELITE if enemy.elite else TARGET_NORMAL
+                contact_chance = self.contact_avoid_chance(target)
+                if contact_chance and self.rng.random() < contact_chance:
                     loss = 0
                 else:
                     loss = self.lose_population_ratio(loss_ratio)
@@ -1750,10 +2038,19 @@ class Game:
             if not bullet.on_screen():
                 self.enemy_bullets.remove(bullet)
             elif bullet.position.distance_to(self.player) <= bullet.radius + self.player_radius:
-                loss = self.lose_population_ratio(bullet.population_loss_ratio)
-                self.enemy_bullets.remove(bullet)
-                self.message = f"被{bullet.source}击中：人口 -{loss}（{bullet.population_loss_ratio:.0%}）"
-                self.message_timer = 1.5
+                avoid_chance = max(
+                    0.0,
+                    min(1.0, self.apply_stat(0.0, "projectile_avoid_chance", TARGET_PLAYER)),
+                )
+                if avoid_chance and self.rng.random() < avoid_chance:
+                    self.enemy_bullets.remove(bullet)
+                    self.message = "闪避了弹丸"
+                    self.message_timer = 0.8
+                else:
+                    loss = self.lose_population_ratio(bullet.population_loss_ratio)
+                    self.enemy_bullets.remove(bullet)
+                    self.message = f"被{bullet.source}击中：人口 -{loss}（{bullet.population_loss_ratio:.0%}）"
+                    self.message_timer = 1.5
 
     def update_gates(self, dt: float) -> None:
         player_rect = pygame.Rect(0, 0, self.player_radius * 2, self.player_radius * 2)
@@ -1879,8 +2176,12 @@ class Game:
 
     def enter_shop(self) -> None:
         self.mode = Mode.SHOP
+        self.shop_round += 1
         self.refresh_cost = 0
         self.detail_card = None
+        self.card_page = "normal"
+        self.dragging_card = None
+        self.dragging_from = ""
         self.message_timer = 0.0
         self.sync_mouse_mode()
         self.roll_shop()
@@ -1890,25 +2191,85 @@ class Game:
         self.fill_shop()
 
     def fill_shop(self) -> None:
-        excluded = {owned.key for owned in self.equipped_cards} | {offer.card.key for offer in self.shop_offers}
+        excluded = {owned.key for owned in self.equipped_cards} | {
+            offer.card.key for offer in self.shop_offers if offer.card is not None
+        }
         available = [card for card in CARDS if card.key not in excluded]
-        weights = []
         rarity_weights = {
             "普通": max(55, 85 - (self.world - 1) * 5),
             "罕见": 14 + (self.world - 1) * 3,
             "稀有": 1 + (self.world - 1) * 2,
         }
-        for card in available:
-            count = sum(1 for candidate in available if candidate.rarity == card.rarity)
-            weights.append(rarity_weights[card.rarity] / max(1, count))
-        pool, pool_weights = available[:], weights[:]
-        for _ in range(min(3 - len(self.shop_offers), len(pool))):
+        while len(self.shop_offers) < 3:
+            if self.rng.random() < OVERLOAD_CHANCE:
+                categories = sorted({card.category for card in CARDS})
+                self.shop_offers.append(ShopOffer(overload_category=self.rng.choice(categories)))
+                continue
+            pool = [card for card in available if card.key not in {offer.card.key for offer in self.shop_offers if offer.card}]
+            if not pool:
+                break
+            pool_weights = []
+            for card in pool:
+                rarity_count = sum(1 for candidate in pool if candidate.rarity == card.rarity)
+                pool_weights.append(rarity_weights[card.rarity] / max(1, rarity_count))
             card = self.rng.choices(pool, weights=pool_weights, k=1)[0]
-            index = pool.index(card)
             enhancement = self.rng.choice(("population", "fire_rate", "damage")) if self.rng.random() < 0.15 else ""
             self.shop_offers.append(ShopOffer(card, enhancement))
-            pool.pop(index)
-            pool_weights.pop(index)
+
+    def draw_overload_card(self, category: str) -> Card:
+        category_cards = [card for card in CARDS if card.category == category]
+        rarities = sorted({card.rarity for card in category_cards})
+        rarity = self.rng.choice(rarities)
+        return self.rng.choice([card for card in category_cards if card.rarity == rarity])
+
+    def exchange_for_overload(self, owned: OwnedCard, offer: ShopOffer) -> bool:
+        if owned not in self.equipped_cards or not offer.is_overload:
+            return False
+        if len(self.overload_cards) >= 2:
+            self.shop_message("过载卡槽已满，无法交换")
+            return False
+        value = self.card_sale_price(owned)
+        self.dispatch_effect_event("on_card_sale", TARGET_PLAYER)
+        self.remove_owned_card(owned, self.equipped_cards)
+        total = min(OVERLOAD_EXCHANGE_COST, offer.exchange_value + value)
+        if total < OVERLOAD_EXCHANGE_COST:
+            index = next(index for index, candidate in enumerate(self.shop_offers) if candidate is offer)
+            self.shop_offers[index] = ShopOffer(
+                overload_category=offer.overload_category,
+                exchange_value=total,
+            )
+            self.shop_message(f"过载交换进度 {total}/{OVERLOAD_EXCHANGE_COST}")
+            return True
+        card = self.draw_overload_card(offer.overload_category)
+        self.overload_cards.append(
+            OwnedCard(card.key, "overload", self.world, acquired_shop_round=self.shop_round)
+        )
+        self.dispatch_effect_event("on_card_purchase", TARGET_PLAYER)
+        index = next(index for index, candidate in enumerate(self.shop_offers) if candidate is offer)
+        self.shop_offers.pop(index)
+        self.fill_shop()
+        self.shop_message(f"交换成功：获得过载牌 {card.name}")
+        return True
+
+    def remove_owned_card(self, owned: OwnedCard, collection: list[OwnedCard]) -> None:
+        collection.remove(owned)
+        for runtime_key in [key for key in self.effect_runtime if key[0] == owned.instance_id]:
+            del self.effect_runtime[runtime_key]
+
+    def sell_owned_card(self, owned: OwnedCard, source: str) -> bool:
+        collection = self.overload_cards if source == "overload" else self.equipped_cards
+        if owned not in collection:
+            return False
+        if source == "overload" and owned.acquired_shop_round >= self.shop_round:
+            self.shop_message("新获得的过载牌要到下次商店才能出售")
+            return False
+        card = CARD_BY_KEY[owned.key]
+        sale_price = OVERLOAD_SALE_PRICE if source == "overload" else self.card_sale_price(owned)
+        self.gold += sale_price
+        self.dispatch_effect_event("on_card_sale", TARGET_PLAYER)
+        self.remove_owned_card(owned, collection)
+        self.shop_message(f"卖出{card.name}，金币 +{sale_price}")
+        return True
 
     def card_rect(self, index: int) -> pygame.Rect:
         return pygame.Rect(55 + index * 280, 155, 250, 245)
@@ -1919,10 +2280,52 @@ class Game:
     def slot_rect(self, index: int) -> pygame.Rect:
         return pygame.Rect(55 + index * 165, 485, 150, 125)
 
+    @staticmethod
+    def shop_page_button_rect() -> pygame.Rect:
+        return pygame.Rect(55, 635, 190, 48)
+
+    @staticmethod
+    def shop_sell_rect() -> pygame.Rect:
+        return pygame.Rect(275, 635, 570, 48)
+
+    def visible_card_collection(self) -> list[OwnedCard]:
+        return self.overload_cards if self.card_page == "overload" else self.equipped_cards
+
+    def handle_shop_mouse_down(self, position: tuple[int, int]) -> None:
+        self.detail_card = None
+        if self.shop_page_button_rect().collidepoint(position):
+            self.card_page = "overload" if self.card_page == "normal" else "normal"
+            return
+        for index, owned in enumerate(self.visible_card_collection()):
+            if self.slot_rect(index).collidepoint(position):
+                self.dragging_card = owned
+                self.dragging_from = self.card_page
+                return
+        self.handle_shop_click(position)
+
+    def handle_shop_mouse_up(self, position: tuple[int, int]) -> None:
+        owned = self.dragging_card
+        source = self.dragging_from
+        self.dragging_card = None
+        self.dragging_from = ""
+        if owned is None:
+            return
+        if self.shop_sell_rect().collidepoint(position):
+            self.sell_owned_card(owned, source)
+            return
+        if source != "normal":
+            return
+        for index, offer in enumerate(self.shop_offers):
+            if offer.is_overload and self.card_rect(index).collidepoint(position):
+                self.exchange_for_overload(owned, offer)
+                return
+
     def handle_shop_click(self, position: tuple[int, int]) -> None:
         self.detail_card = None
         for index, offer in enumerate(self.shop_offers):
             if self.card_rect(index).collidepoint(position):
+                if offer.is_overload or offer.card is None:
+                    return
                 card = offer.card
                 price = self.card_purchase_price(card)
                 if len(self.equipped_cards) >= 5:
@@ -1960,17 +2363,6 @@ class Game:
                     else:
                         self.default_fire_rate += 0.8
                 return
-        for index, owned in enumerate(self.equipped_cards[:]):
-            if self.slot_rect(index).collidepoint(position):
-                card = CARD_BY_KEY[owned.key]
-                sale_price = self.card_sale_price(owned)
-                self.gold += sale_price
-                self.dispatch_effect_event("on_card_sale", TARGET_PLAYER)
-                self.equipped_cards.remove(owned)
-                for runtime_key in [key for key in self.effect_runtime if key[0] == owned.key]:
-                    del self.effect_runtime[runtime_key]
-                self.shop_message(f"卖出{card.name}，金币 +{sale_price}")
-                return
         refresh_rect = pygame.Rect(910, 495, 150, 52)
         if refresh_rect.collidepoint(position):
             charged = max(0, round(self.apply_stat(self.refresh_cost, "refresh_cost", TARGET_PLAYER)))
@@ -1986,7 +2378,7 @@ class Game:
             self.start_world()
 
     def handle_shop_detail(self, position: tuple[int, int]) -> None:
-        for index, owned in enumerate(self.equipped_cards):
+        for index, owned in enumerate(self.visible_card_collection()):
             if self.slot_rect(index).collidepoint(position):
                 self.detail_card = None if self.detail_card == owned else owned
                 return
@@ -2032,6 +2424,8 @@ class Game:
                 self.draw_overlay("防线失守", f"{self.death_reason} | 按 R 重开")
             elif self.mode == Mode.VICTORY:
                 self.draw_overlay("八世界通关", f"最终金币 {self.gold} | 按 R 再来一局")
+        if self.dev_panel_open:
+            self.draw_dev_panel()
         pygame.display.flip()
 
     @staticmethod
@@ -2288,11 +2682,28 @@ class Game:
         self.screen.fill((12, 15, 24))
         self.blit_text(f"世界 {self.world} 通关商店", (50, 35), WHITE, self.font_large)
         self.blit_text(f"金币 {self.gold}", (1035, 48), YELLOW, self.font)
-        self.blit_text("卡牌固定价格；强化卡有15%出现率", (55, 115), MUTED, self.font_small)
+        self.blit_text("普通强化率15%；每个商品位独立有5%概率出现过载牌", (55, 115), MUTED, self.font_small)
         enhance_names = {"population": "+5人口", "fire_rate": "+10%射速", "damage": "+1基础伤害"}
         for index, offer in enumerate(self.shop_offers):
-            card = offer.card
             rect = self.card_rect(index)
+            if offer.is_overload:
+                pygame.draw.rect(self.screen, (74, 18, 27), rect, border_radius=12)
+                pygame.draw.rect(self.screen, OVERLOAD, rect, 4, border_radius=12)
+                self.blit_text("过载", (rect.x + 18, rect.y + 16), OVERLOAD, self.font_small)
+                category = CATEGORY_SPECS.get(offer.overload_category, offer.overload_category)
+                label = self.font_large.render(category, True, WHITE)
+                self.screen.blit(label, label.get_rect(center=(rect.centerx, rect.y + 100)))
+                self.blit_text("真实卡牌将在交换成功时揭示", (rect.x + 18, rect.y + 145), MUTED, self.font_tiny)
+                self.blit_text(
+                    f"拖入普通卡牌  {offer.exchange_value}/{OVERLOAD_EXCHANGE_COST}",
+                    (rect.x + 18, rect.bottom - 42),
+                    YELLOW,
+                    self.font_small,
+                )
+                continue
+            card = offer.card
+            if card is None:
+                continue
             color = RARITY_COLORS[card.rarity]
             pygame.draw.rect(self.screen, PANEL, rect, border_radius=12)
             pygame.draw.rect(self.screen, color, rect, 3, border_radius=12)
@@ -2320,20 +2731,38 @@ class Game:
             self.blit_text(label, (rect.x + 16, rect.y + 13), WHITE, self.font_small)
             self.blit_text(f"等级 {self.attribute_purchases[key]} | {price} 金币", (rect.x + 16, rect.y + 44), YELLOW, self.font_tiny)
 
-        self.blit_text("携带卡牌 5槽（左键出售，右键查看详情）", (55, 445), MUTED, self.font_small)
-        for index in range(5):
+        collection = self.visible_card_collection()
+        slot_count = 2 if self.card_page == "overload" else 5
+        page_name = "过载卡槽 2槽" if self.card_page == "overload" else "普通卡槽 5槽"
+        self.blit_text(f"{page_name}（拖动出售，右键查看详情）", (55, 445), MUTED, self.font_small)
+        for index in range(slot_count):
             rect = self.slot_rect(index)
             pygame.draw.rect(self.screen, PANEL, rect, border_radius=8)
-            if index < len(self.equipped_cards):
-                owned = self.equipped_cards[index]
+            if index < len(collection):
+                owned = collection[index]
                 card = CARD_BY_KEY[owned.key]
-                pygame.draw.rect(self.screen, RARITY_COLORS[card.rarity], rect, 2, border_radius=8)
+                card_color = OVERLOAD if self.card_page == "overload" else RARITY_COLORS[card.rarity]
+                pygame.draw.rect(self.screen, card_color, rect, 3 if self.card_page == "overload" else 2, border_radius=8)
                 self.blit_text(card.name, (rect.x + 10, rect.y + 20), WHITE, self.font_tiny)
-                if owned.enhancement:
+                if owned.enhancement and owned.enhancement != "overload":
                     self.blit_text(f"强化 {enhance_names[owned.enhancement]}", (rect.x + 10, rect.y + 48), GREEN, self.font_tiny)
-                self.blit_text(f"卖出 +{self.card_sale_price(owned)}", (rect.x + 10, rect.y + 82), YELLOW, self.font_tiny)
+                if self.card_page == "overload":
+                    sale_text = "下次商店可售" if owned.acquired_shop_round >= self.shop_round else "卖出 +20"
+                else:
+                    sale_text = f"交换值/卖价 {self.card_sale_price(owned)}"
+                self.blit_text(sale_text, (rect.x + 10, rect.y + 82), YELLOW, self.font_tiny)
             else:
-                self.blit_text("空卡槽", (rect.x + 44, rect.y + 50), MUTED, self.font_tiny)
+                self.blit_text("空过载槽" if self.card_page == "overload" else "空卡槽", (rect.x + 35, rect.y + 50), MUTED, self.font_tiny)
+
+        page_button = self.shop_page_button_rect()
+        pygame.draw.rect(self.screen, OVERLOAD if self.card_page == "normal" else BLUE, page_button, border_radius=8)
+        page_label = "查看过载卡槽" if self.card_page == "normal" else "查看普通卡槽"
+        self.blit_text(page_label, (page_button.x + 20, page_button.y + 12), WHITE, self.font_small)
+        sell_rect = self.shop_sell_rect()
+        pygame.draw.rect(self.screen, (55, 22, 28), sell_rect, border_radius=8)
+        pygame.draw.rect(self.screen, RED, sell_rect, 2, border_radius=8)
+        sell_label = "将卡牌拖到这里出售（过载牌固定 20 金币）"
+        self.blit_text(sell_label, (sell_rect.x + 70, sell_rect.y + 12), WHITE, self.font_small)
 
         refresh = pygame.Rect(910, 495, 150, 52)
         next_rect = pygame.Rect(1080, 495, 145, 52)
@@ -2349,9 +2778,18 @@ class Game:
             self.font_tiny,
         )
         if self.message_timer > 0:
-            self.blit_text(self.message, (910, 620), YELLOW, self.font_small)
+            self.blit_text(self.message, (910, 610), YELLOW, self.font_tiny)
         if self.detail_card:
             self.draw_card_detail(self.detail_card)
+        elif self.dragging_card:
+            card = CARD_BY_KEY[self.dragging_card.key]
+            position = pygame.Vector2(pygame.mouse.get_pos())
+            ghost = pygame.Rect(round(position.x - 75), round(position.y - 35), 150, 70)
+            color = OVERLOAD if self.dragging_from == "overload" else RARITY_COLORS[card.rarity]
+            pygame.draw.rect(self.screen, PANEL, ghost, border_radius=8)
+            pygame.draw.rect(self.screen, color, ghost, 3, border_radius=8)
+            name = self.font_tiny.render(card.name, True, WHITE)
+            self.screen.blit(name, name.get_rect(center=ghost.center))
 
     def draw_card_detail(self, owned: OwnedCard) -> None:
         card = CARD_BY_KEY[owned.key]
@@ -2360,16 +2798,17 @@ class Game:
         shade.fill((0, 0, 0, 150))
         self.screen.blit(shade, (0, 0))
         rect = pygame.Rect(350, 190, 580, 310)
-        color = RARITY_COLORS[card.rarity]
+        color = OVERLOAD if owned.enhancement == "overload" else RARITY_COLORS[card.rarity]
         pygame.draw.rect(self.screen, PANEL, rect, border_radius=14)
         pygame.draw.rect(self.screen, color, rect, 4, border_radius=14)
         self.blit_text(f"{card.name}  [{card.rarity}]", (rect.x + 35, rect.y + 30), color, self.font_large)
         self.blit_text("卡牌功效", (rect.x + 35, rect.y + 105), MUTED, self.font_small)
         self.draw_wrapped(card.description, pygame.Rect(rect.x + 35, rect.y + 140, rect.width - 70, 70), WHITE)
-        enhancement = enhance_names.get(owned.enhancement, "无附加强化")
-        self.blit_text(f"附加效果：{enhancement}", (rect.x + 35, rect.y + 220), GREEN if owned.enhancement else MUTED, self.font_small)
+        enhancement = "过载牌（独立卡槽）" if owned.enhancement == "overload" else enhance_names.get(owned.enhancement, "无附加强化")
+        enhancement_color = OVERLOAD if owned.enhancement == "overload" else GREEN if owned.enhancement else MUTED
+        self.blit_text(f"附加效果：{enhancement}", (rect.x + 35, rect.y + 220), enhancement_color, self.font_small)
         if card.category == "growth":
-            self.blit_text(f"当前成长层数：{self.growth_level(owned.key)}", (rect.x + 35, rect.y + 255), YELLOW, self.font_small)
+            self.blit_text(f"当前成长层数：{self.growth_level(owned)}", (rect.x + 35, rect.y + 255), YELLOW, self.font_small)
         self.blit_text("右键卡槽或空白处关闭", (rect.right - 220, rect.bottom - 30), MUTED, self.font_tiny)
 
     def draw_wrapped(self, text: str, rect: pygame.Rect, color: tuple[int, int, int]) -> None:
@@ -2450,6 +2889,7 @@ class Game:
             self.screen.blit(volume, volume.get_rect(center=(WIDTH // 2 + 91, y + 19)))
 
         self.blit_text("Esc 继续游戏", (panel.x + 175, 525), WHITE, self.font_small)
+        self.blit_text("F1 开发者测试面板", (panel.x + 45, 498), CYAN, self.font_small)
         restart = self.pause_restart_rect()
         pygame.draw.rect(self.screen, RED, restart, border_radius=10)
         restart_label = self.font.render("重新开始  R", True, WHITE)

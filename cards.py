@@ -92,6 +92,10 @@ STAT_SPECS = {
     "projectile_bounces": "子弹反弹次数",
     "population_loss_reduction": "人口损失减免",
     "contact_avoid_chance": "接触免伤概率",
+    "elite_contact_avoid_chance": "精英突破免伤概率",
+    "projectile_avoid_chance": "弹丸免伤概率",
+    "boss_contact_avoid_chance": "Boss接触免伤概率",
+    "elite_spawn_interval": "精英刷新间隔",
     "starting_population": "世界初始人口",
     "elite_kill_population": "精英击杀人口",
     "boss_windup": "Boss蓄力时间",
@@ -130,6 +134,10 @@ STAT_TARGETS = {
     "projectile_bounces": (TARGET_PLAYER,),
     "population_loss_reduction": (TARGET_PLAYER,),
     "contact_avoid_chance": (TARGET_NORMAL,),
+    "elite_contact_avoid_chance": (TARGET_ELITE,),
+    "projectile_avoid_chance": (TARGET_PLAYER,),
+    "boss_contact_avoid_chance": (TARGET_BOSS,),
+    "elite_spawn_interval": (TARGET_PLAYER,),
     "starting_population": (TARGET_PLAYER,),
     "elite_kill_population": (TARGET_PLAYER,),
     "boss_windup": (TARGET_BOSS,),
@@ -278,7 +286,7 @@ NUMERIC_RUNTIME_PARAMETERS = {
     "damage_scale",
 }
 BOOLEAN_RUNTIME_PARAMETERS = {"clear_on_move", "clear_on_world", "global_effect", "enabled"}
-TEXT_RUNTIME_PARAMETERS = {"condition_stat", "comparison", "scale_stat", "boss_kind"}
+TEXT_RUNTIME_PARAMETERS = {"condition_stat", "comparison", "scale_stat", "boss_kind", "message"}
 
 
 @dataclass(frozen=True)
