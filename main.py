@@ -327,6 +327,9 @@ class Game:
         self.aim_position = pygame.Vector2(WIDTH / 2, HEIGHT / 2)
         self.mouse_sensitivity_editing = False
         self.sensitivity_input_text = ""
+        self.dev_panel_open = False
+        self.dev_editing_field: str | None = None
+        self.dev_input_text = ""
         self.cursor_time = 0.0
         self.cursor_phase = 0.0
         self.cursor_trail: list[tuple[float, pygame.Vector2]] = []
@@ -1013,6 +1016,244 @@ class Game:
             return "."
         return None
 
+    def toggle_dev_panel(self) -> None:
+        self.dev_panel_open = not self.dev_panel_open
+        self.dev_editing_field = None
+        self.dev_input_text = ""
+        if self.dev_panel_open:
+            self._disable_relative_mouse()
+            pygame.mouse.set_visible(True)
+        else:
+            self.sync_mouse_mode()
+
+    def dev_field_specs(self) -> tuple[tuple[str, str, bool, float, float, float, str], ...]:
+        return (
+            ("gold", "金币", True, 0, 999_999_999, 100, "int"),
+            ("population", "人口 / 血量", True, 1, 999_999_999, 100, "int"),
+            ("default_population", "初始人口", True, 1, 999, 1, "int"),
+            ("default_damage", "基础伤害", False, 0.0, 9_999.0, 1.0, "float"),
+            ("default_fire_rate", "基础射速", False, 0.0, 9_999.0, 1.0, "float"),
+            ("world", "世界", True, 1, 8, 1, "int"),
+            ("elapsed", "关卡秒数", False, 0.0, WORLD_DURATION, 5.0, "float"),
+        )
+
+    def dev_value(self, key: str) -> float:
+        return float(
+            {
+                "gold": self.gold,
+                "population": self.population,
+                "default_population": self.default_population,
+                "default_damage": self.default_damage,
+                "default_fire_rate": self.default_fire_rate,
+                "world": self.world,
+                "elapsed": self.elapsed,
+            }[key]
+        )
+
+    def dev_set_value(self, key: str, value: float) -> None:
+        if key == "gold":
+            self.gold = int(round(value))
+        elif key == "population":
+            self.population = int(round(value))
+            self.population_peak = max(self.population_peak, self.population)
+        elif key == "default_population":
+            self.default_population = int(round(value))
+        elif key == "default_damage":
+            self.default_damage = round(value, 2)
+        elif key == "default_fire_rate":
+            self.default_fire_rate = round(value, 2)
+        elif key == "world":
+            self.world = int(round(value))
+        elif key == "elapsed":
+            self.elapsed = round(value, 2)
+
+    def dev_format_value(self, key: str, value: float, kind: str) -> str:
+        if kind == "int":
+            return f"{int(round(value)):,}"
+        return f"{value:.1f}"
+
+    def dev_raw_value_text(self, key: str) -> str:
+        return f"{self.dev_value(key):g}"
+
+    def dev_begin_edit(self, key: str) -> None:
+        self.dev_editing_field = key
+        self.dev_input_text = self.dev_raw_value_text(key)
+
+    def dev_commit_edit(self) -> None:
+        if self.dev_editing_field is None:
+            return
+        key = self.dev_editing_field
+        spec = next(spec for spec in self.dev_field_specs() if spec[0] == key)
+        _, _, is_int, minimum, maximum, _, _ = spec
+        try:
+            value = float(self.dev_input_text.strip())
+        except ValueError:
+            value = self.dev_value(key)
+        if is_int:
+            value = round(value)
+        value = max(minimum, min(maximum, value))
+        self.dev_set_value(key, value)
+        self.dev_editing_field = None
+        self.dev_input_text = ""
+
+    def dev_step_value(self, key: str, direction: int) -> None:
+        spec = next(spec for spec in self.dev_field_specs() if spec[0] == key)
+        _, _, is_int, minimum, maximum, step, _ = spec
+        value = self.dev_value(key) + direction * step
+        if is_int:
+            value = round(value)
+        value = max(minimum, min(maximum, value))
+        self.dev_set_value(key, value)
+
+    def dev_skip_to_shop(self) -> None:
+        if self.world >= 8:
+            self.mode = Mode.VICTORY
+            self.sync_mouse_mode()
+        else:
+            self.enter_shop()
+
+    def dev_clear_enemies(self) -> None:
+        self.enemies.clear()
+        self.bosses.clear()
+        self.gates.clear()
+        self.enemy_bullets.clear()
+
+    @staticmethod
+    def dev_panel_rect() -> pygame.Rect:
+        return pygame.Rect(160, 30, 960, 690)
+
+    @staticmethod
+    def dev_field_value_rect(index: int) -> pygame.Rect:
+        return pygame.Rect(460, 128 + index * 58, 260, 42)
+
+    @staticmethod
+    def dev_field_button_rect(index: int, direction: int) -> pygame.Rect:
+        return pygame.Rect(740 if direction < 0 else 800, 128 + index * 58, 46, 42)
+
+    @staticmethod
+    def dev_action_button_rect(row: int, column: int) -> pygame.Rect:
+        widths = (300, 210, 160, 150) if row == 0 else (200, 200, 180, 240)
+        x = 220
+        gap = 20
+        for index in range(column):
+            x += widths[index] + gap
+        return pygame.Rect(x, 522 + row * 66, widths[column], 52)
+
+    def handle_dev_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_F1):
+                self.toggle_dev_panel()
+                return
+            if self.dev_editing_field is not None:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.dev_commit_edit()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.dev_input_text = self.dev_input_text[:-1]
+                else:
+                    char = self._digit_key_char(event.key)
+                    if char is not None:
+                        if char == "." and "." in self.dev_input_text:
+                            return
+                        self.dev_input_text += char
+                return
+            return
+
+        if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
+            return
+
+        specs = self.dev_field_specs()
+        value_rects = [self.dev_field_value_rect(index) for index in range(len(specs))]
+        if self.dev_editing_field is not None and not any(
+            rect.collidepoint(event.pos) for rect in value_rects
+        ):
+            self.dev_commit_edit()
+
+        for index, spec in enumerate(specs):
+            if self.dev_field_value_rect(index).collidepoint(event.pos):
+                self.dev_begin_edit(spec[0])
+                return
+            if self.dev_field_button_rect(index, -1).collidepoint(event.pos):
+                self.dev_step_value(spec[0], -1)
+                return
+            if self.dev_field_button_rect(index, 1).collidepoint(event.pos):
+                self.dev_step_value(spec[0], 1)
+                return
+
+        if self.dev_action_button_rect(0, 0).collidepoint(event.pos):
+            self.dev_skip_to_shop()
+        elif self.dev_action_button_rect(0, 1).collidepoint(event.pos):
+            self.dev_clear_enemies()
+        elif self.dev_action_button_rect(0, 2).collidepoint(event.pos):
+            self.gold += 10_000
+        elif self.dev_action_button_rect(0, 3).collidepoint(event.pos):
+            self.population += 10_000
+            self.population_peak = max(self.population_peak, self.population)
+        elif self.dev_action_button_rect(1, 0).collidepoint(event.pos):
+            self.default_damage += 100.0
+        elif self.dev_action_button_rect(1, 1).collidepoint(event.pos):
+            self.default_fire_rate += 10.0
+        elif self.dev_action_button_rect(1, 2).collidepoint(event.pos):
+            self.world = min(8, self.world + 1)
+        elif self.dev_action_button_rect(1, 3).collidepoint(event.pos):
+            self.toggle_dev_panel()
+
+    def draw_dev_panel(self) -> None:
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((5, 7, 12, 215))
+        self.screen.blit(shade, (0, 0))
+
+        panel = self.dev_panel_rect()
+        pygame.draw.rect(self.screen, PANEL, panel, border_radius=16)
+        pygame.draw.rect(self.screen, CYAN, panel, 3, border_radius=16)
+
+        self.blit_text("开发者测试面板", (panel.x + 40, panel.y + 22), WHITE, self.font_large)
+        self.blit_text("点击数值可直接输入，± 按钮步进调整；F1 / Esc 关闭", (panel.x + 40, panel.y + 70), MUTED, self.font_small)
+
+        for index, spec in enumerate(self.dev_field_specs()):
+            key, label, _, _, _, _, kind = spec
+            y = 128 + index * 58
+            self.blit_text(label, (panel.x + 40, y + 8), WHITE, self.font_small)
+            value_rect = self.dev_field_value_rect(index)
+            pygame.draw.rect(self.screen, GRID, value_rect, border_radius=8)
+            if self.dev_editing_field == key:
+                pygame.draw.rect(self.screen, YELLOW, value_rect, 2, border_radius=8)
+                display = self.dev_input_text + ("_" if (pygame.time.get_ticks() // 500) % 2 == 0 else "")
+            else:
+                display = self.dev_format_value(key, self.dev_value(key), kind)
+            value_surface = self.font_small.render(display, True, WHITE)
+            self.screen.blit(value_surface, (value_rect.x + 12, value_rect.y + 9))
+            for direction in (-1, 1):
+                button_rect = self.dev_field_button_rect(index, direction)
+                pygame.draw.rect(self.screen, GRID, button_rect, border_radius=8)
+                pygame.draw.rect(self.screen, MUTED, button_rect, 2, border_radius=8)
+                text = "-" if direction < 0 else "+"
+                label_surface = self.font.render(text, True, CYAN)
+                self.screen.blit(label_surface, label_surface.get_rect(center=button_rect.center))
+
+        action_specs = (
+            ("结束本世界 → 商店", GREEN, 0, 0),
+            ("清空场上敌人", BLUE, 0, 1),
+            ("金币 +10,000", YELLOW, 0, 2),
+            ("人口 +10,000", CYAN, 0, 3),
+            ("伤害 +100", ORANGE, 1, 0),
+            ("射速 +10", PURPLE, 1, 1),
+            ("世界 +1", WHITE, 1, 2),
+            ("关闭面板", RED, 1, 3),
+        )
+        for text, color, row, column in action_specs:
+            rect = self.dev_action_button_rect(row, column)
+            pygame.draw.rect(self.screen, GRID, rect, border_radius=10)
+            pygame.draw.rect(self.screen, color, rect, 2, border_radius=10)
+            label_surface = self.font_small.render(text, True, color)
+            self.screen.blit(label_surface, label_surface.get_rect(center=rect.center))
+
+        readout = (
+            f"当前伤害 {self.current_damage():.1f}  |  "
+            f"当前射速 {self.current_fire_rate():.1f}/s  |  "
+            f"理论DPS {format_number(self.current_dps())}"
+        )
+        self.blit_text(readout, (panel.x + 40, panel.bottom - 46), CYAN, self.font_small)
+
     def update_cursor_effects(self, dt: float, position: pygame.Vector2) -> None:
         self.cursor_time += dt
         self.cursor_phase += dt
@@ -1308,6 +1549,10 @@ class Game:
                 else:
                     return
 
+        if self.dev_panel_open:
+            self.handle_dev_event(event)
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.mode == Mode.MAIN_MENU:
                 for index, destination in enumerate((Mode.PLAYING, Mode.TUTORIAL, Mode.SETTINGS)):
@@ -1373,6 +1618,9 @@ class Game:
                 self.begin_mouse_sensitivity_edit()
                 self.sensitivity_input_text = "0." if char == "." else char
                 return
+        if event.key == pygame.K_F1:
+            self.toggle_dev_panel()
+            return
         if event.key == pygame.K_ESCAPE:
             if self.mode in (Mode.TUTORIAL, Mode.SETTINGS):
                 self.mode = Mode.MAIN_MENU
@@ -1393,6 +1641,8 @@ class Game:
             self.start_world()
 
     def update(self, dt: float) -> None:
+        if self.dev_panel_open:
+            return
         self.update_audio(dt)
         if self.mode != Mode.PLAYING:
             return
@@ -2174,6 +2424,8 @@ class Game:
                 self.draw_overlay("防线失守", f"{self.death_reason} | 按 R 重开")
             elif self.mode == Mode.VICTORY:
                 self.draw_overlay("八世界通关", f"最终金币 {self.gold} | 按 R 再来一局")
+        if self.dev_panel_open:
+            self.draw_dev_panel()
         pygame.display.flip()
 
     @staticmethod
@@ -2637,6 +2889,7 @@ class Game:
             self.screen.blit(volume, volume.get_rect(center=(WIDTH // 2 + 91, y + 19)))
 
         self.blit_text("Esc 继续游戏", (panel.x + 175, 525), WHITE, self.font_small)
+        self.blit_text("F1 开发者测试面板", (panel.x + 45, 498), CYAN, self.font_small)
         restart = self.pause_restart_rect()
         pygame.draw.rect(self.screen, RED, restart, border_radius=10)
         restart_label = self.font.render("重新开始  R", True, WHITE)
