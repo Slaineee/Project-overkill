@@ -8,8 +8,8 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 import pygame
 
-from cards import CARD_BY_KEY, TARGET_BOSS, TARGET_NORMAL, Card, CardEffect, EffectTargets
-from main import Boss, Bullet, EnemyBullet, Game, Gate, Mode, OwnedCard
+from cards import CARD_BY_KEY, TARGET_BOSS, TARGET_ELITE, TARGET_NORMAL, TARGET_PLAYER, Card, CardEffect, EffectTargets
+from main import Boss, Bullet, EnemyBullet, Game, Gate, Mode, OwnedCard, ShopOffer
 
 
 class GameplayTests(unittest.TestCase):
@@ -515,8 +515,8 @@ class GameplayTests(unittest.TestCase):
             OwnedCard("critical_power", "", 1),
         ]
         self.assertEqual(game.critical_chance(), 0.75)
-        self.assertEqual(game.critical_damage_multiplier(), 3.50)
-        self.assertAlmostEqual(game.expected_critical_multiplier(), 2.875)
+        self.assertEqual(game.critical_damage_multiplier(), 2.50)
+        self.assertAlmostEqual(game.expected_critical_multiplier(), 2.125)
 
     def test_recruit_signal_changes_special_gate_probabilities(self) -> None:
         game = Game()
@@ -548,6 +548,14 @@ class GameplayTests(unittest.TestCase):
         self.assertAlmostEqual(game.calm_aim_bonus(), 0.60)
         game.still_time = 0.0
         self.assertEqual(game.calm_aim_bonus(), 0)
+
+    def test_calm_aim_bonus_caps_at_five_hundred_percent(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("still_shot", "", 1)]
+        game.still_time = 60.0
+        self.assertEqual(game.calm_aim_bonus(), 5.0)
+        game.still_time = 120.0
+        self.assertEqual(game.calm_aim_bonus(), 5.0)
 
     def test_phase_move_preserves_calm_aim_while_moving(self) -> None:
         game = Game()
@@ -621,6 +629,156 @@ class GameplayTests(unittest.TestCase):
         self.assertEqual(game.card_sale_price(OwnedCard("composure", "", 1, True)), 2)
         self.assertEqual(game.card_sale_price(OwnedCard("damage", "", 1)), 1)
 
+    def test_heavy_caliber_uses_corrected_base_damage(self) -> None:
+        effects = {effect.stat: effect for effect in CARD_BY_KEY["heavy_ca"].effects}
+        self.assertEqual(effects["base_damage"].parameters["value"], 64.0)
+        self.assertEqual(effects["fire_rate"].parameters["value"], -0.99)
+        self.assertEqual(effects["gate_damage"].parameters["value"], 1.0)
+        self.assertEqual(effects["fire_rate_correction"].parameters["value"], 0.1)
+
+    def test_each_shop_slot_independently_can_roll_overload(self) -> None:
+        game = Game()
+        game.shop_offers = []
+        game.rng.random = MagicMock(return_value=0.0)
+        game.fill_shop()
+        self.assertEqual(len(game.shop_offers), 3)
+        self.assertTrue(all(offer.is_overload for offer in game.shop_offers))
+        self.assertTrue(all(offer.card is None for offer in game.shop_offers))
+        self.assertEqual(game.rng.random.call_count, 3)
+
+    def test_overload_exchange_reveals_identity_only_at_completion(self) -> None:
+        game = Game()
+        game.shop_round = 1
+        owned = OwnedCard("composure", "", 1)
+        offer = ShopOffer(overload_category="damage")
+        game.equipped_cards = [owned]
+        game.shop_offers = [offer]
+        game.fill_shop = MagicMock()
+        game.draw_overload_card = MagicMock(return_value=CARD_BY_KEY["damage"])
+
+        self.assertTrue(game.exchange_for_overload(owned, offer))
+
+        self.assertFalse(game.equipped_cards)
+        self.assertEqual([card.key for card in game.overload_cards], ["damage"])
+        self.assertEqual(game.overload_cards[0].enhancement, "overload")
+        self.assertEqual(game.overload_cards[0].acquired_shop_round, 1)
+        game.draw_overload_card.assert_called_once_with("damage")
+
+    def test_overload_exchange_uses_wholesale_actual_sale_value(self) -> None:
+        game = Game()
+        owned = OwnedCard("critical_focus", "", 1, True, 1)
+        offer = ShopOffer(overload_category="damage")
+        game.equipped_cards = [owned]
+        game.shop_offers = [offer]
+
+        self.assertTrue(game.exchange_for_overload(owned, offer))
+
+        self.assertEqual(game.shop_offers[0].exchange_value, 1)
+        self.assertFalse(game.overload_cards)
+
+    def test_overload_exchange_accumulates_and_discards_value_above_five(self) -> None:
+        game = Game()
+        common = OwnedCard("damage", "", 1)
+        rare = OwnedCard("composure", "", 1)
+        offer = ShopOffer(overload_category="damage")
+        game.equipped_cards = [common, rare]
+        game.shop_offers = [offer]
+        game.fill_shop = MagicMock()
+        game.draw_overload_card = MagicMock(return_value=CARD_BY_KEY["damage"])
+
+        self.assertTrue(game.exchange_for_overload(common, offer))
+        self.assertEqual(game.shop_offers[0].exchange_value, 1)
+        game.draw_overload_card.assert_not_called()
+
+        self.assertTrue(game.exchange_for_overload(rare, game.shop_offers[0]))
+        self.assertEqual(len(game.overload_cards), 1)
+        self.assertFalse(game.equipped_cards)
+        game.draw_overload_card.assert_called_once_with("damage")
+
+    def test_full_overload_slots_block_exchange_without_consuming_card(self) -> None:
+        game = Game()
+        owned = OwnedCard("damage", "", 1)
+        game.equipped_cards = [owned]
+        game.overload_cards = [
+            OwnedCard("fire_rate", "overload", 1),
+            OwnedCard("recruit", "overload", 1),
+        ]
+        offer = ShopOffer(overload_category="damage")
+        game.shop_offers = [offer]
+
+        self.assertFalse(game.exchange_for_overload(owned, offer))
+        self.assertIn(owned, game.equipped_cards)
+        self.assertEqual(offer.exchange_value, 0)
+
+    def test_overload_sale_is_locked_until_next_shop_and_pays_twenty(self) -> None:
+        game = Game()
+        game.shop_round = 2
+        owned = OwnedCard("damage", "overload", 1, acquired_shop_round=2)
+        game.overload_cards = [owned]
+
+        self.assertFalse(game.sell_owned_card(owned, "overload"))
+        self.assertEqual(game.gold, 0)
+        self.assertIn(owned, game.overload_cards)
+
+        game.shop_round = 3
+        self.assertTrue(game.sell_owned_card(owned, "overload"))
+        self.assertEqual(game.gold, 20)
+        self.assertFalse(game.overload_cards)
+
+    def test_overload_duplicate_stacks_with_owned_normal_card(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("damage", "", 1)]
+        game.overload_cards = [OwnedCard("damage", "overload", 1)]
+        bonus = float(CARD_BY_KEY["damage"].effects[0].parameters["value"])
+        self.assertEqual(game.current_base_damage(), 10 + bonus * 2)
+
+    def test_duplicate_overload_growth_uses_each_cards_acquired_world(self) -> None:
+        game = Game()
+        game.world = 5
+        game.population = 10
+        game.equipped_cards = [OwnedCard("growth_recovery", "", 1)]
+        game.overload_cards = [OwnedCard("growth_recovery", "overload", 4)]
+        effect = next(
+            effect
+            for effect in CARD_BY_KEY["growth_recovery"].effects
+            if effect.trigger == "on_elite_kill"
+        )
+        per_world = float(effect.parameters["per_world"])
+
+        game.dispatch_effect_event("on_elite_kill", TARGET_NORMAL)
+
+        expected = 10 + round(4 * per_world) + round(1 * per_world)
+        self.assertEqual(game.population, expected)
+
+    def test_card_is_sold_only_after_dragging_to_sale_area(self) -> None:
+        game = Game()
+        game.mode = Mode.SHOP
+        owned = OwnedCard("damage", "", 1)
+        game.equipped_cards = [owned]
+
+        game.handle_event(
+            pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=game.slot_rect(0).center)
+        )
+        self.assertIn(owned, game.equipped_cards)
+        game.handle_event(
+            pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=game.shop_sell_rect().center)
+        )
+        self.assertNotIn(owned, game.equipped_cards)
+        self.assertEqual(game.gold, 1)
+
+    def test_shop_button_switches_between_normal_and_overload_slots(self) -> None:
+        game = Game()
+        game.mode = Mode.SHOP
+        self.assertEqual(game.card_page, "normal")
+        game.handle_event(
+            pygame.event.Event(
+                pygame.MOUSEBUTTONDOWN,
+                button=1,
+                pos=game.shop_page_button_rect().center,
+            )
+        )
+        self.assertEqual(game.card_page, "overload")
+
     def test_population_fire_scales_slowly_and_caps_at_fifty_percent(self) -> None:
         game = Game()
         game.equipped_cards = [OwnedCard("population_fire", "", 1)]
@@ -670,6 +828,180 @@ class GameplayTests(unittest.TestCase):
         game.equipped_cards = [OwnedCard("shotgun", "", 1)]
         self.assertEqual(game.current_volley_multiplier(), 1.9)
         self.assertAlmostEqual(game.current_dps(), 2 * 10 * 8 * 1.9)
+
+    def test_elite_hunt_grants_gold_at_twenty_percent_chance(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_hunt", "", 1)]
+        game.rng.random = MagicMock(return_value=0.1)
+        before = game.gold
+        changes = game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertEqual(changes["gold"], 1)
+        self.assertEqual(game.gold, before + 1)
+
+    def test_elite_hunt_increases_elite_spawn_frequency(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_hunt", "", 1)]
+        base = max(8.0, 18.0 - (game.world - 1) * 1.45)
+        self.assertAlmostEqual(
+            game.apply_stat(base, "elite_spawn_interval", TARGET_PLAYER),
+            base * 0.6667,
+            places=3,
+        )
+
+    def test_elite_contact_avoid_chance_blocks_elite_breakthrough(self) -> None:
+        effect = CardEffect(
+            EffectTargets(enemies=(TARGET_ELITE,)),
+            "passive",
+            "modify_stat",
+            "elite_contact_avoid_chance",
+            "add_flat",
+            "add",
+            "",
+            0,
+            {"value": 1.0},
+        )
+        custom = Card("elite_dodge", "精英闪避", "精英突破必闪。", "普通", 3, "survival", (effect,))
+        with patch.dict(CARD_BY_KEY, {custom.key: custom}):
+            game = Game()
+            game.equipped_cards = [OwnedCard(custom.key, "", 1)]
+            game.population = 100
+            game.spawn_enemy(elite=True)
+            elite = game.enemies[0]
+            elite.position.update(game.player.x, game.player.y)
+            game.rng.random = MagicMock(return_value=0.0)
+            game.update_enemies(0.01)
+            self.assertEqual(game.population, 100)
+            self.assertFalse(game.enemies)
+
+    def test_projectile_avoid_chance_dodges_enemy_bullet(self) -> None:
+        effect = CardEffect(
+            EffectTargets(player=True),
+            "passive",
+            "modify_stat",
+            "projectile_avoid_chance",
+            "add_flat",
+            "add",
+            "",
+            0,
+            {"value": 1.0},
+        )
+        custom = Card("bullet_dodge", "弹丸闪避", "弹丸必闪。", "普通", 3, "survival", (effect,))
+        with patch.dict(CARD_BY_KEY, {custom.key: custom}):
+            game = Game()
+            game.equipped_cards = [OwnedCard(custom.key, "", 1)]
+            game.population = 100
+            game.enemy_bullets = [EnemyBullet(game.player.copy(), pygame.Vector2(), population_loss_ratio=0.05)]
+            game.rng.random = MagicMock(return_value=0.0)
+            game.update_enemy_bullets(0)
+            self.assertEqual(game.population, 100)
+            self.assertFalse(game.enemy_bullets)
+
+    def test_boss_contact_avoid_chance_interface(self) -> None:
+        effect = CardEffect(
+            EffectTargets(enemies=(TARGET_BOSS,)),
+            "passive",
+            "modify_stat",
+            "boss_contact_avoid_chance",
+            "add_flat",
+            "add",
+            "",
+            0,
+            {"value": 0.4},
+        )
+        custom = Card("boss_dodge", "Boss闪避", "Boss接触免伤。", "普通", 3, "survival", (effect,))
+        with patch.dict(CARD_BY_KEY, {custom.key: custom}):
+            game = Game()
+            game.equipped_cards = [OwnedCard(custom.key, "", 1)]
+            self.assertEqual(game.contact_avoid_chance(TARGET_BOSS), 0.4)
+
+    def test_elite_adrenaline_refreshes_fire_rate_bonus_without_stacking(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_adrenaline", "", 1)]
+        game.rng.random = MagicMock(return_value=0.5)
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertAlmostEqual(game.current_fire_rate(), 8 * 1.5)
+        game.update_effect_runtime(4.0)
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        game.update_effect_runtime(4.0)
+        self.assertAlmostEqual(game.current_fire_rate(), 8 * 1.5)
+
+    def test_elite_adrenaline_shows_trigger_message(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_adrenaline", "", 1)]
+        game.rng.random = MagicMock(return_value=0.5)
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertIn("嗜血扳机", game.message)
+        self.assertGreater(game.message_timer, 0)
+
+    def test_elite_adrenaline_no_message_when_chance_fails(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_adrenaline", "", 1)]
+        game.rng.random = MagicMock(return_value=0.9)
+        game.message = ""
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertEqual(game.message, "")
+
+    def test_elite_harvest_grants_population_per_elite_kill(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_harvest", "", 1)]
+        game.population = 100
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertEqual(game.population, 110)
+
+    def test_elite_decree_stacks_damage_per_elite_kill(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_decree", "", 1)]
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertAlmostEqual(game.current_damage_bonus(), 0.02)
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertAlmostEqual(game.current_damage_bonus(), 0.04)
+
+    def test_elite_decree_executes_elite_below_threshold(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_decree", "", 1)]
+        game.spawn_enemy(elite=True)
+        elite = game.enemies[0]
+        elite.position.update(300, 300)
+        elite.hp = elite.max_hp * 0.55
+        damage = elite.max_hp * 0.05
+        game.bullets = [Bullet(elite.position.copy(), pygame.Vector2(), damage, damage)]
+        game.update_bullets(0)
+        self.assertEqual(elite.hp, 0)
+
+    def test_elite_decree_grants_gold_on_elite_kill(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_decree", "", 1)]
+        before = game.gold
+        game.dispatch_effect_event("on_elite_kill", TARGET_ELITE)
+        self.assertEqual(game.gold, before + 4)
+
+    def test_elite_bait_doubles_elite_spawn_frequency(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_bait", "", 1)]
+        base = max(8.0, 18.0 - (game.world - 1) * 1.45)
+        self.assertAlmostEqual(
+            game.apply_stat(base, "elite_spawn_interval", TARGET_PLAYER),
+            base * 0.5,
+            places=3,
+        )
+
+    def test_elite_armor_adds_elite_contact_avoid_chance(self) -> None:
+        game = Game()
+        game.equipped_cards = [OwnedCard("elite_armor", "", 1)]
+        self.assertEqual(game.contact_avoid_chance(TARGET_ELITE), 0.25)
+
+    def test_elite_spawn_frequency_stacks_multiplicatively(self) -> None:
+        game = Game()
+        game.equipped_cards = [
+            OwnedCard("elite_hunt", "", 1),
+            OwnedCard("elite_bait", "", 1),
+        ]
+        base = max(8.0, 18.0 - (game.world - 1) * 1.45)
+        self.assertAlmostEqual(
+            game.apply_stat(base, "elite_spawn_interval", TARGET_PLAYER),
+            base * 0.6667 * 0.5,
+            places=3,
+        )
 
     def test_recruit_gate_gains_multiplier_after_unlock(self) -> None:
         gate = Gate(pygame.Vector2(), "special", hp=100, max_hp=100, buff="population")

@@ -58,6 +58,16 @@ class CardDataTests(unittest.TestCase):
         self.assertIn("projectile_bounces", editable_stats)
         self.assertIn("fire_rate_correction", editable_stats)
 
+    def test_editor_exposes_avoid_and_elite_spawn_stats(self) -> None:
+        editable_stats = ACTION_STATS["modify_stat"]
+        for stat in (
+            "elite_contact_avoid_chance",
+            "projectile_avoid_chance",
+            "boss_contact_avoid_chance",
+            "elite_spawn_interval",
+        ):
+            self.assertIn(stat, editable_stats)
+
     def test_effect_targets_support_enemy_combinations(self) -> None:
         targets = EffectTargets(enemies=(TARGET_NORMAL, TARGET_ELITE, TARGET_BOSS))
         self.assertTrue(targets.includes(TARGET_NORMAL))
