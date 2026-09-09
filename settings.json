@@ -1,0 +1,13 @@
+{
+  "bgm_volume": 0.0,
+  "sfx_volume": 0.4,
+  "effect_volumes": {
+    "shot": 1.0,
+    "enemy_hit": 1.0,
+    "kill": 1.0,
+    "gate_hit": 1.0,
+    "gate_collect": 1.0
+  },
+  "mouse_sensitivity": 1.0,
+  "crosshair_preset": "classic"
+}

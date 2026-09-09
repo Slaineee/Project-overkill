@@ -64,6 +64,15 @@ CURSOR_TRAIL_MAX_AGE = 0.42
 CURSOR_TRAIL_CAP = 30
 CURSOR_PARTICLE_CAP = 140
 CURSOR_PALETTE = (CYAN, (96, 255, 255), BLUE, PURPLE, WHITE)
+CROSSHAIR_PRESETS = (
+    {"key": "classic", "name": "经典环形", "palette": CURSOR_PALETTE},
+    {"key": "osu", "name": "OSU 流光", "palette": (CYAN, WHITE, (96, 255, 255), BLUE)},
+    {"key": "neon", "name": "霓虹十字", "palette": (PURPLE, CYAN, (255, 96, 220), WHITE)},
+    {"key": "void", "name": "虚空三角", "palette": (PURPLE, BLUE, (120, 80, 255), WHITE)},
+    {"key": "hex", "name": "六边形脉冲", "palette": (ORANGE, YELLOW, (255, 220, 120), WHITE)},
+)
+CROSSHAIR_BOX = 72
+CROSSHAIR_SUPERSAMPLE = 2
 OVERLOAD = (255, 55, 70)
 OVERLOAD_CHANCE = 0.05
 OVERLOAD_EXCHANGE_COST = 5
@@ -325,6 +334,7 @@ class Game:
         self.running = True
         self.mouse_sensitivity = 1.0
         self.aim_position = pygame.Vector2(WIDTH / 2, HEIGHT / 2)
+        self.crosshair_preset = "classic"
         self.mouse_sensitivity_editing = False
         self.sensitivity_input_text = ""
         self.dev_panel_open = False
@@ -448,6 +458,11 @@ class Game:
             self.mouse_sensitivity = max(
                 0.1, min(5.0, float(data.get("mouse_sensitivity", self.mouse_sensitivity)))
             )
+            crosshair = data.get("crosshair_preset")
+            if isinstance(crosshair, str) and any(
+                preset["key"] == crosshair for preset in CROSSHAIR_PRESETS
+            ):
+                self.crosshair_preset = crosshair
         except (TypeError, ValueError):
             return
 
@@ -457,6 +472,7 @@ class Game:
             "sfx_volume": self.sfx_volume,
             "effect_volumes": dict(self.effect_volumes),
             "mouse_sensitivity": self.mouse_sensitivity,
+            "crosshair_preset": self.crosshair_preset,
         }
         try:
             settings_path().parent.mkdir(parents=True, exist_ok=True)
@@ -1006,6 +1022,26 @@ class Game:
         self.mouse_sensitivity_editing = False
         self.sensitivity_input_text = ""
 
+    def crosshair_preset_name(self) -> str:
+        for preset in CROSSHAIR_PRESETS:
+            if preset["key"] == self.crosshair_preset:
+                return preset["name"]
+        return CROSSHAIR_PRESETS[0]["name"]
+
+    def crosshair_palette(self) -> tuple[tuple[int, int, int], ...]:
+        for preset in CROSSHAIR_PRESETS:
+            if preset["key"] == self.crosshair_preset:
+                return preset["palette"]
+        return CURSOR_PALETTE
+
+    def cycle_crosshair_preset(self, direction: int) -> None:
+        keys = [preset["key"] for preset in CROSSHAIR_PRESETS]
+        try:
+            index = keys.index(self.crosshair_preset)
+        except ValueError:
+            index = 0
+        self.crosshair_preset = keys[(index + direction) % len(keys)]
+
     @staticmethod
     def _digit_key_char(key: int) -> str | None:
         if pygame.K_0 <= key <= pygame.K_9:
@@ -1257,7 +1293,11 @@ class Game:
     def update_cursor_effects(self, dt: float, position: pygame.Vector2) -> None:
         self.cursor_time += dt
         self.cursor_phase += dt
-        self.cursor_trail.append((self.cursor_time, position.copy()))
+        if (
+            not self.cursor_trail
+            or position.distance_squared_to(self.cursor_trail[-1][1]) >= 4.0
+        ):
+            self.cursor_trail.append((self.cursor_time, position.copy()))
         while len(self.cursor_trail) > CURSOR_TRAIL_CAP:
             self.cursor_trail.pop(0)
         while self.cursor_trail and self.cursor_time - self.cursor_trail[0][0] > CURSOR_TRAIL_MAX_AGE:
@@ -1269,7 +1309,7 @@ class Game:
         self.last_cursor_pos = position.copy()
 
         self.cursor_spawn_timer -= dt
-        if self.cursor_spawn_timer <= 0:
+        if speed >= 18.0 and self.cursor_spawn_timer <= 0:
             count = 1 if speed < 120 else 2 if speed < 360 else 4
             for _ in range(count):
                 if len(self.cursor_particles) < CURSOR_PARTICLE_CAP:
@@ -1288,16 +1328,17 @@ class Game:
         velocity = pygame.Vector2(math.cos(angle), math.sin(angle)) * speed
         life = self.cursor_rng.uniform(0.16, 0.52)
         size = self.cursor_rng.uniform(1.4, 3.6)
-        color = self.cursor_rng.choice(CURSOR_PALETTE)
+        color = self.cursor_rng.choice(self.crosshair_palette())
         return CursorParticle(position.copy(), velocity, life, life, size, color)
 
     def _cursor_color(self, age_fraction: float) -> tuple[int, int, int]:
+        palette = self.crosshair_palette()
         phase = (self.cursor_phase * 0.9 + age_fraction * 0.35) % 1.0
-        segment = phase * (len(CURSOR_PALETTE) - 1)
+        segment = phase * (len(palette) - 1)
         index = int(segment)
         fraction = segment - index
-        first = CURSOR_PALETTE[index]
-        second = CURSOR_PALETTE[min(index + 1, len(CURSOR_PALETTE) - 1)]
+        first = palette[index]
+        second = palette[min(index + 1, len(palette) - 1)]
         return tuple(
             round(first[channel] * (1 - fraction) + second[channel] * fraction)
             for channel in range(3)
@@ -1305,47 +1346,199 @@ class Game:
 
     def draw_cursor_effects(self) -> None:
         position = self.current_mouse_position()
-        glow = pygame.Surface((WIDTH, HEIGHT))
+        glow_scale = 4
+        glow = pygame.Surface((WIDTH // glow_scale, HEIGHT // glow_scale))
         glow.fill((0, 0, 0))
         if len(self.cursor_trail) >= 2:
             for index in range(len(self.cursor_trail) - 1):
                 timestamp, point = self.cursor_trail[index]
                 age = min(1.0, max(0.0, self.cursor_time - timestamp) / CURSOR_TRAIL_MAX_AGE)
                 strength = (1.0 - age) ** 2
-                radius = 1.0 + (1.0 - age) * 4.5
                 color = self._cursor_color(age)
+                px = round(point.x / glow_scale)
+                py = round(point.y / glow_scale)
+                radius = max(1, round((1.0 + (1.0 - age) * 4.5) / glow_scale))
                 shade = tuple(round(channel * strength) for channel in color)
-                pygame.draw.circle(glow, shade, (round(point.x), round(point.y)), max(1, round(radius)))
+                outer_shade = tuple(round(channel * strength * 0.38) for channel in color)
+                pygame.draw.circle(glow, outer_shade, (px, py), max(2, round(radius * 2.0)))
+                pygame.draw.circle(glow, shade, (px, py), radius)
         for particle in self.cursor_particles:
             remaining = max(0.0, particle.life / particle.max_life)
-            radius = max(1, round(particle.size * (0.35 + 0.65 * remaining)))
+            radius = max(1, round((particle.size * (0.35 + 0.65 * remaining)) / glow_scale))
             shade = tuple(round(channel * remaining) for channel in particle.color)
-            pygame.draw.circle(
-                glow, shade, (round(particle.position.x), round(particle.position.y)), radius
+            head = (round(particle.position.x / glow_scale), round(particle.position.y / glow_scale))
+            tail = (
+                round((particle.position.x - particle.velocity.x * 0.06) / glow_scale),
+                round((particle.position.y - particle.velocity.y * 0.06) / glow_scale),
             )
-        self.screen.blit(glow, (0, 0), special_flags=pygame.BLEND_ADD)
+            pygame.draw.line(glow, shade, tail, head, max(1, radius))
+            pygame.draw.circle(glow, shade, head, radius)
+        self.screen.blit(
+            pygame.transform.smoothscale(glow, (WIDTH, HEIGHT)),
+            (0, 0),
+            special_flags=pygame.BLEND_ADD,
+        )
         self._draw_crosshair(position)
 
     def _draw_crosshair(self, position: pygame.Vector2) -> None:
-        center = (round(position.x), round(position.y))
-        pygame.draw.circle(self.screen, WHITE, center, 8, 2)
-        pygame.draw.circle(self.screen, CYAN, center, 2)
-        for axis in (
-            pygame.Vector2(1, 0),
-            pygame.Vector2(-1, 0),
-            pygame.Vector2(0, 1),
-            pygame.Vector2(0, -1),
-        ):
-            start = position + axis * 11
-            end = position + axis * 18
-            pygame.draw.line(
-                self.screen, CYAN, (round(start.x), round(start.y)), (round(end.x), round(end.y)), 2
+        sprite = self._render_crosshair_sprite()
+        self.screen.blit(
+            sprite,
+            sprite.get_rect(center=(round(position.x), round(position.y))),
+        )
+
+    def _render_crosshair_sprite(self, draw_scale: float = 1.0) -> pygame.Surface:
+        size = CROSSHAIR_BOX * CROSSHAIR_SUPERSAMPLE
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        self._draw_crosshair_preset(
+            surface,
+            pygame.Vector2(size / 2, size / 2),
+            self.crosshair_preset,
+            self.cursor_phase,
+            scale=CROSSHAIR_SUPERSAMPLE * draw_scale,
+        )
+        return pygame.transform.smoothscale(surface, (CROSSHAIR_BOX, CROSSHAIR_BOX))
+
+    def _draw_crosshair_preset(
+        self,
+        surface: pygame.Surface,
+        position: pygame.Vector2,
+        preset_key: str,
+        phase: float,
+        scale: float = 1.0,
+    ) -> None:
+        x, y = round(position[0]), round(position[1])
+        if preset_key == "osu":
+            self._draw_osu_crosshair(surface, x, y, phase, scale)
+        elif preset_key == "neon":
+            self._draw_neon_crosshair(surface, x, y, phase, scale)
+        elif preset_key == "void":
+            self._draw_void_crosshair(surface, x, y, phase, scale)
+        elif preset_key == "hex":
+            self._draw_hex_crosshair(surface, x, y, phase, scale)
+        else:
+            self._draw_classic_crosshair(surface, x, y, phase, scale)
+
+    def _draw_classic_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        pygame.draw.circle(surface, WHITE, (x, y), max(1, round(8 * scale)), max(1, round(2 * scale)))
+        pygame.draw.circle(surface, CYAN, (x, y), max(1, round(2 * scale)))
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            start = (x + round(dx * 11 * scale), y + round(dy * 11 * scale))
+            end = (x + round(dx * 18 * scale), y + round(dy * 18 * scale))
+            pygame.draw.line(surface, CYAN, start, end, max(1, round(2 * scale)))
+        spin = phase * 2.4
+        rect = pygame.Rect(0, 0, max(1, round(34 * scale)), max(1, round(34 * scale)))
+        rect.center = (x, y)
+        pygame.draw.arc(surface, WHITE, rect, spin, spin + math.pi * 0.72, max(1, round(2 * scale)))
+        pygame.draw.arc(surface, WHITE, rect, spin + math.pi, spin + math.pi * 1.72, max(1, round(2 * scale)))
+
+    def _draw_osu_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        palette = self.crosshair_palette()
+        core = palette[0]
+        accent = palette[1]
+        spin = phase * 3.4
+        counter = phase * 2.2
+        pulse = 1.0 + 0.12 * math.sin(phase * 5.0)
+        pygame.draw.circle(surface, core, (x, y), max(1, round(4 * scale * pulse)))
+        pygame.draw.circle(surface, WHITE, (x, y), max(1, round(2 * scale)))
+        outer = pygame.Rect(0, 0, max(1, round(28 * scale)), max(1, round(28 * scale)))
+        outer.center = (x, y)
+        for offset in (0.0, math.pi * 2 / 3, math.pi * 4 / 3):
+            start_angle = spin + offset
+            pygame.draw.arc(
+                surface, accent, outer, start_angle, start_angle + math.pi * 0.8, max(1, round(2 * scale))
             )
-        spin = self.cursor_phase * 2.4
-        arc_rect = pygame.Rect(0, 0, 34, 34)
-        arc_rect.center = center
-        pygame.draw.arc(self.screen, WHITE, arc_rect, spin, spin + math.pi * 0.72, 2)
-        pygame.draw.arc(self.screen, WHITE, arc_rect, spin + math.pi, spin + math.pi * 1.72, 2)
+        inner = pygame.Rect(0, 0, max(1, round(18 * scale)), max(1, round(18 * scale)))
+        inner.center = (x, y)
+        pygame.draw.arc(
+            surface, core, inner, counter, counter + math.pi * 1.4, max(1, round(2 * scale))
+        )
+        for angle in (spin, spin + math.pi * 0.5, spin + math.pi, spin + math.pi * 1.5):
+            start = (x + round(math.cos(angle) * 10 * scale), y + round(math.sin(angle) * 10 * scale))
+            end = (x + round(math.cos(angle) * 14 * scale), y + round(math.sin(angle) * 14 * scale))
+            pygame.draw.line(surface, accent, start, end, max(1, round(1 * scale)))
+
+    def _draw_neon_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        cyan = (64, 215, 255)
+        pink = (255, 96, 220)
+        breathe = 0.5 + 0.5 * math.sin(phase * 3.8)
+        reach = 14 + breathe * 15
+        half = max(1, round(6 * scale))
+        diamond = []
+        spin = phase * 2.0
+        for index in range(4):
+            angle = spin + index * math.pi / 2
+            diamond.append(
+                (x + round(math.cos(angle) * half), y + round(math.sin(angle) * half))
+            )
+        pygame.draw.polygon(surface, WHITE, diamond)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            for start_off, end_off, width, color in (
+                (10, 14, 3, cyan),
+                (14, reach * 0.68, 2, pink),
+                (reach * 0.68, reach, 1, WHITE),
+            ):
+                start = (x + round(dx * start_off * scale), y + round(dy * start_off * scale))
+                end = (x + round(dx * end_off * scale), y + round(dy * end_off * scale))
+                pygame.draw.line(surface, color, start, end, max(1, round(width * scale)))
+            tip = (x + round(dx * reach * scale), y + round(dy * reach * scale))
+            pygame.draw.circle(
+                surface, cyan, tip, max(1, round((2.5 + breathe) * scale))
+            )
+
+    def _draw_void_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        purple = (186, 104, 255)
+        blue = (71, 114, 255)
+        pulse = 1.0 + 0.08 * math.sin(phase * 3.2)
+        layers = (
+            (phase * 1.6, 18 * scale * pulse, purple),
+            (-phase * 1.15, 12 * scale, blue),
+            (phase * 0.7, 6 * scale, WHITE),
+        )
+        for rotation, radius, color in layers:
+            points = []
+            for index in range(3):
+                angle = rotation + index * math.tau / 3
+                points.append(
+                    (x + round(math.cos(angle) * radius), y + round(math.sin(angle) * radius))
+                )
+            pygame.draw.polygon(surface, color, points, max(1, round(2 * scale)))
+        pygame.draw.circle(surface, WHITE, (x, y), max(1, round(2 * scale)))
+
+    def _draw_hex_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        orange = (255, 136, 66)
+        yellow = (255, 207, 77)
+        pulse = 1.0 + 0.10 * math.sin(phase * 4.2)
+        outer_points = []
+        for index in range(6):
+            angle = math.pi / 6 + index * math.tau / 6
+            radius = 16 * scale * pulse
+            outer_points.append(
+                (x + round(math.cos(angle) * radius), y + round(math.sin(angle) * radius))
+            )
+        pygame.draw.polygon(surface, orange, outer_points, max(1, round(2 * scale)))
+        inner_points = []
+        rotation = phase * 1.4
+        for index in range(6):
+            angle = rotation + math.pi / 6 + index * math.tau / 6
+            radius = 10 * scale
+            inner_points.append(
+                (x + round(math.cos(angle) * radius), y + round(math.sin(angle) * radius))
+            )
+        pygame.draw.polygon(surface, yellow, inner_points, max(1, round(2 * scale)))
+        pygame.draw.circle(surface, yellow, (x, y), max(1, round(3 * scale)))
+        for point in outer_points:
+            pygame.draw.circle(surface, WHITE, point, max(1, round(1 * scale)))
 
     def card_purchase_price(self, card: Card) -> int:
         return max(0, round(self.apply_stat(card.price, "card_price", TARGET_PLAYER)))
@@ -1580,6 +1773,12 @@ class Game:
                 if self.settings_mouse_sensitivity_value_rect().collidepoint(event.pos):
                     self.begin_mouse_sensitivity_edit()
                     return
+                if self.settings_crosshair_button_rect(-1).collidepoint(event.pos):
+                    self.cycle_crosshair_preset(-1)
+                    return
+                if self.settings_crosshair_button_rect(1).collidepoint(event.pos):
+                    self.cycle_crosshair_preset(1)
+                    return
                 for index, (kind, _) in enumerate(self.settings_volume_rows()):
                     for direction in (-1, 1):
                         if self.settings_volume_button_rect(index, direction).collidepoint(event.pos):
@@ -1645,6 +1844,7 @@ class Game:
             return
         self.update_audio(dt)
         if self.mode != Mode.PLAYING:
+            self.cursor_phase += dt
             return
         self.elapsed += dt
         self.population_peak = max(self.population_peak, self.population)
@@ -2454,7 +2654,7 @@ class Game:
 
     @staticmethod
     def settings_audio_y(index: int) -> int:
-        return 250 + index * 42
+        return 295 + index * 42
 
     @staticmethod
     def settings_mouse_sensitivity_button_rect(direction: int) -> pygame.Rect:
@@ -2463,6 +2663,10 @@ class Game:
     @staticmethod
     def settings_mouse_sensitivity_value_rect() -> pygame.Rect:
         return pygame.Rect(885, 152, 150, 42)
+
+    @staticmethod
+    def settings_crosshair_button_rect(direction: int) -> pygame.Rect:
+        return pygame.Rect(810 if direction < 0 else 1055, 205, 48, 42)
 
     def preview_volume(self, kind: str) -> None:
         if kind == "bgm":
@@ -2557,7 +2761,27 @@ class Game:
         sensitivity = self.font.render(text, True, CYAN)
         self.screen.blit(sensitivity, sensitivity.get_rect(center=value_rect.center))
 
-        self.blit_text("声音", (58, 225), WHITE, self.font_small)
+        crosshair_rect = pygame.Rect(270, 205, 850, 52)
+        pygame.draw.rect(self.screen, PANEL, crosshair_rect, border_radius=8)
+        self.blit_text("准星预设", (crosshair_rect.x + 22, crosshair_rect.y + 13), WHITE, self.font_small)
+        crosshair_minus = self.settings_crosshair_button_rect(-1)
+        crosshair_plus = self.settings_crosshair_button_rect(1)
+        pygame.draw.rect(self.screen, GRID, crosshair_minus, border_radius=7)
+        pygame.draw.rect(self.screen, GRID, crosshair_plus, border_radius=7)
+        self.blit_text("<", (crosshair_minus.x + 17, crosshair_minus.y + 5), WHITE, self.font)
+        self.blit_text(">", (crosshair_plus.x + 14, crosshair_plus.y + 5), WHITE, self.font)
+        preview = self._render_crosshair_sprite(0.55)
+        self.screen.blit(
+            preview,
+            preview.get_rect(center=(930, crosshair_rect.centery)),
+        )
+        preset_name = self.font_small.render(self.crosshair_preset_name(), True, CYAN)
+        self.screen.blit(
+            preset_name,
+            (crosshair_rect.x + 128, crosshair_rect.y + 13),
+        )
+
+        self.blit_text("声音", (58, 270), WHITE, self.font_small)
         for index, (kind, label) in enumerate(self.settings_volume_rows()):
             y = self.settings_audio_y(index)
             rect = pygame.Rect(270, y, 850, 52)
