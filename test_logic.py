@@ -52,8 +52,8 @@ class LogicTests(unittest.TestCase):
         self.assertEqual(world_dps_threshold(1), 45_000)
         self.assertEqual(world_dps_threshold(5), 1_000_000)
         self.assertEqual(world_dps_threshold(8), 8_000_000)
-        self.assertEqual(world_dps_threshold(9), 300_000_000)
-        self.assertEqual(world_dps_threshold(10), 900_000_000)
+        self.assertEqual(world_dps_threshold(9), 150_000_000)
+        self.assertEqual(world_dps_threshold(10), 300_000_000)
         self.assertEqual(world_target_health(1, "big"), 675_000)
         self.assertEqual(world_target_health(8, "big"), 120_000_000)
         self.assertEqual(world_target_health(9, "big"), 18_000_000_000)
@@ -102,7 +102,9 @@ class LogicTests(unittest.TestCase):
     def test_number_format(self) -> None:
         self.assertEqual(format_number(9999), "9,999")
         self.assertEqual(format_number(12500), "1.2w")
-        self.assertEqual(format_number(100_000_000), "1.00e+08")
+        self.assertEqual(format_number(100_000_000), "1亿")
+        self.assertEqual(format_number(world_dps_threshold(9)), "1.5亿")
+        self.assertEqual(format_number(world_dps_threshold(10)), "3亿")
 
     def test_boss_gold_scales_with_current_wallet(self) -> None:
         self.assertEqual(boss_gold_reward(4, 0), 4)

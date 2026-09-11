@@ -82,8 +82,8 @@ WORLD_DPS_THRESHOLDS = (
     2_000_000,
     4_000_000,
     8_000_000,
+    150_000_000,
     300_000_000,
-    900_000_000,
 )
 
 WORLD_TARGET_HEALTH = (
@@ -142,4 +142,5 @@ def format_number(value: float) -> str:
         return f"{int(value):,}"
     if absolute < 100_000_000:
         return f"{value / 10_000:.1f}w"
-    return f"{value:.2e}"
+    yi = f"{value / 100_000_000:.1f}".rstrip("0").rstrip(".")
+    return f"{yi}亿"

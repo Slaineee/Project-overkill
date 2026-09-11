@@ -50,19 +50,26 @@ WORLD_DURATION = 120.0
 MAX_WORLD = 10
 FINAL_CHALLENGE_WORLDS = (9, 10)
 
-BG = (15, 18, 27)
-PANEL = (27, 32, 46)
-GRID = (35, 41, 57)
-WHITE = (235, 239, 247)
-MUTED = (150, 160, 180)
-CYAN = (64, 215, 255)
-BLUE = (71, 114, 255)
-RED = (242, 77, 93)
-DARK_RED = (112, 34, 45)
-GREEN = (74, 222, 128)
-YELLOW = (255, 207, 77)
-ORANGE = (255, 136, 66)
-PURPLE = (186, 104, 255)
+BG = (3, 5, 15)
+PANEL = (10, 15, 31)
+PANEL_RAISED = (17, 25, 48)
+GRID = (34, 48, 77)
+UI_RIM = (65, 94, 132)
+WHITE = (241, 248, 255)
+MUTED = (151, 174, 205)
+CYAN = (36, 226, 255)
+BLUE = (52, 105, 255)
+RED = (235, 78, 89)
+DARK_RED = (112, 39, 47)
+GREEN = (86, 255, 181)
+YELLOW = (255, 221, 77)
+ORANGE = (255, 126, 56)
+PURPLE = (184, 79, 255)
+MAGENTA = (255, 48, 187)
+GLASS_TINT = (8, 14, 34, 226)
+GLASS_RIM = (173, 235, 255, 76)
+STEP_OFF = (22, 31, 52)
+STEP_DIM = (43, 73, 105)
 RARITY_COLORS = {"普通": WHITE, "罕见": PURPLE, "稀有": YELLOW}
 
 CURSOR_TRAIL_MAX_AGE = 0.42
@@ -436,7 +443,7 @@ class Game:
         os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_WARP", "0")
         pygame.mixer.pre_init(44100, -16, 2, 256)
         pygame.init()
-        pygame.display.set_caption("双线火力 - 十世界终局挑战")
+        pygame.display.set_caption("火力过载 - 十世界终局挑战")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.font_tiny = load_font(16)
@@ -444,6 +451,9 @@ class Game:
         self.font = load_font(26)
         self.font_large = load_font(42, True)
         self.font_huge = load_font(68, True)
+        mono_path = pygame.font.match_font(["cascadiamono", "consolas", "microsoftyahei"])
+        self.font_numeric = pygame.font.Font(mono_path, 22)
+        self.font_numeric_large = pygame.font.Font(mono_path, 42)
         self.rng = random.Random()
         self.audio_rng = random.Random()
         self.cursor_rng = random.Random()
@@ -3868,7 +3878,7 @@ class Game:
 
     @staticmethod
     def main_menu_button_rect(index: int) -> pygame.Rect:
-        return pygame.Rect(WIDTH // 2 - 170, 340 + index * 82, 340, 60)
+        return pygame.Rect(72, 330 + index * 66, 318, 52)
 
     @staticmethod
     def menu_back_rect() -> pygame.Rect:
@@ -3988,36 +3998,237 @@ class Game:
             self.play_effect_sound(self.gate_collect_sound, kind)
 
     def draw_menu_background(self) -> None:
-        self.screen.fill((7, 10, 19))
-        for index in range(18):
-            x = (index * 149 + 37) % WIDTH
-            y = (index * 83 + 31) % HEIGHT
-            pygame.draw.circle(self.screen, (24, 71, 100), (x, y), 2 + index % 3)
-        for offset in range(-300, WIDTH + 400, 170):
-            pygame.draw.line(self.screen, (13, 42, 61), (offset, HEIGHT), (offset + 430, 0), 2)
-        glow = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        pygame.draw.circle(glow, (32, 180, 255, 24), (WIDTH // 2, 250), 280)
-        self.screen.blit(glow, (0, 0))
+        self.screen.fill(BG)
+        field = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pulse = 0.5 + 0.5 * math.sin(self.cursor_phase * 2.4)
+        for radius, alpha in ((520, 12), (330, 18), (170, 24)):
+            pygame.draw.circle(field, (*CYAN, alpha), (1090, 165), radius)
+        for radius, alpha in ((460, 10), (280, 17), (120, 26)):
+            pygame.draw.circle(field, (*MAGENTA, alpha), (900, 620), radius)
+        # Alpha-composite the large light fields. Additive blending in pygame
+        # applies the RGB values independently from alpha and turns these
+        # intentionally soft blooms into opaque cyan/magenta discs.
+        self.screen.blit(field, (0, 0))
+        for y in range(0, HEIGHT, 36):
+            pygame.draw.line(self.screen, (11, 20, 43), (0, y), (WIDTH, y), 1)
+        for x in range(-HEIGHT, WIDTH, 72):
+            pygame.draw.line(self.screen, (10, 18, 38), (x, HEIGHT), (x + HEIGHT, 0), 1)
+        horizon_y = 574
+        self.draw_neon_line((0, horizon_y), (WIDTH, horizon_y), CYAN, 1, 18)
+        scan_y = int((self.cursor_phase * 95) % HEIGHT)
+        pygame.draw.line(self.screen, (*WHITE,), (0, scan_y), (WIDTH, scan_y), 1)
+        scan = pygame.Surface((WIDTH, 46), pygame.SRCALPHA)
+        scan.fill((36, 226, 255, int(5 + pulse * 7)))
+        self.screen.blit(scan, (0, scan_y - 23))
+
+    def draw_neon_line(
+        self,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        color: tuple[int, int, int],
+        width: int = 2,
+        glow: int = 12,
+    ) -> None:
+        layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        for extra, alpha in ((glow, 14), (max(2, glow // 2), 30)):
+            pygame.draw.line(layer, (*color, alpha), start, end, width + extra)
+        self.screen.blit(layer, (0, 0))
+        pygame.draw.line(self.screen, color, start, end, width)
+
+    def draw_corner_brackets(
+        self,
+        rect: pygame.Rect,
+        color: tuple[int, int, int],
+        length: int = 16,
+        width: int = 2,
+    ) -> None:
+        for x, y, sx, sy in (
+            (rect.left, rect.top, 1, 1),
+            (rect.right, rect.top, -1, 1),
+            (rect.left, rect.bottom, 1, -1),
+            (rect.right, rect.bottom, -1, -1),
+        ):
+            pygame.draw.line(self.screen, color, (x, y), (x + sx * length, y), width)
+            pygame.draw.line(self.screen, color, (x, y), (x, y + sy * length), width)
+
+    def draw_section_title(self, title: str, position: tuple[int, int], color: tuple[int, int, int] = CYAN) -> None:
+        x, y = position
+        self.draw_neon_line((x, y + 31), (x + 170, y + 31), color, 1, 8)
+        self.blit_text(title, (x, y), WHITE, self.font_small)
+
+    def draw_ui_panel(
+        self,
+        rect: pygame.Rect,
+        *,
+        fill: tuple[int, int, int] = PANEL,
+        rim: tuple[int, int, int] = UI_RIM,
+        radius: int = 8,
+        glass: bool = False,
+    ) -> None:
+        shadow = pygame.Surface((rect.width + 28, rect.height + 30), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, (0, 0, 0, 120), (14, 16, rect.width, rect.height), border_radius=radius + 2)
+        self.screen.blit(shadow, (rect.x - 14, rect.y - 8))
+        if glass:
+            layer = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(layer, GLASS_TINT, layer.get_rect(), border_radius=radius)
+            pygame.draw.line(layer, GLASS_RIM, (radius, 1), (rect.width - radius, 1), 2)
+            self.screen.blit(layer, rect.topleft)
+        else:
+            pygame.draw.rect(self.screen, fill, rect, border_radius=radius)
+        pygame.draw.rect(self.screen, rim, rect, 1, border_radius=radius)
+        self.draw_corner_brackets(rect, rim, min(14, max(7, rect.height // 3)), 1)
+
+    def draw_step_row(
+        self,
+        rect: pygame.Rect,
+        *,
+        active_index: int | None = None,
+        progress: float | None = None,
+        danger_from: int = 12,
+        labels: bool = False,
+    ) -> None:
+        gap = 5
+        step_width = (rect.width - gap * 15) // 16
+        for index in range(16):
+            x = rect.x + index * (step_width + gap)
+            key = pygame.Rect(x, rect.y, step_width, rect.height)
+            reached = progress is not None and index <= round(max(0.0, min(1.0, progress)) * 15)
+            color = STEP_DIM if reached else STEP_OFF
+            if index >= danger_from:
+                color = RED if reached else DARK_RED
+            if active_index == index:
+                color = CYAN
+            pygame.draw.rect(self.screen, color, key, border_radius=4)
+            highlight = tuple(min(255, channel + 34) for channel in color)
+            pygame.draw.line(self.screen, highlight, (x + 4, rect.y + 2), (x + step_width - 4, rect.y + 2), 1)
+            if labels:
+                number_color = WHITE if reached or active_index == index else MUTED
+                number = self.font_tiny.render(str(index + 1), True, number_color)
+                self.screen.blit(number, number.get_rect(center=(key.centerx, key.bottom + 13)))
+
+    def draw_value_stepper(
+        self,
+        value: str,
+        minus: pygame.Rect,
+        plus: pygame.Rect,
+        *,
+        editing: bool = False,
+    ) -> None:
+        value_rect = pygame.Rect(minus.right + 16, minus.y, plus.left - minus.right - 32, minus.height)
+        self.draw_ui_panel(value_rect, fill=(12, 17, 20), rim=CYAN if editing else GRID, radius=6)
+        rendered = self.font_numeric.render(value, True, CYAN)
+        self.screen.blit(rendered, rendered.get_rect(center=value_rect.center))
+        for button, symbol in ((minus, "-"), (plus, "+")):
+            hovered = button.collidepoint(pygame.mouse.get_pos())
+            self.draw_ui_panel(button, fill=PANEL_RAISED if hovered else PANEL, rim=CYAN if hovered else GRID, radius=6)
+            glyph = self.font.render(symbol, True, WHITE)
+            self.screen.blit(glyph, glyph.get_rect(center=button.center))
 
     def draw_menu_button(self, rect: pygame.Rect, text: str, color: tuple[int, int, int] = CYAN) -> None:
         hovered = rect.collidepoint(pygame.mouse.get_pos())
-        fill = tuple(min(255, value + (18 if hovered else 0)) for value in PANEL)
-        pygame.draw.rect(self.screen, fill, rect, border_radius=10)
-        pygame.draw.rect(self.screen, color, rect, 3 if hovered else 2, border_radius=10)
-        label = self.font.render(text, True, WHITE)
-        self.screen.blit(label, label.get_rect(center=rect.center))
+        pressed = hovered and pygame.mouse.get_pressed(num_buttons=3)[0]
+        primary = color in (GREEN, RED, OVERLOAD, MAGENTA)
+        fill = tuple(max(0, channel // 7) for channel in color) if primary else PANEL_RAISED if hovered else PANEL
+        draw_rect = rect.move(0, 1 if pressed else 0)
+        if hovered:
+            glow = pygame.Surface((draw_rect.width + 28, draw_rect.height + 28), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (*color, 38), (14, 14, draw_rect.width, draw_rect.height), border_radius=12)
+            self.screen.blit(glow, (draw_rect.x - 14, draw_rect.y - 14))
+        self.draw_ui_panel(draw_rect, fill=fill, rim=color if hovered or primary else UI_RIM, radius=6)
+        pygame.draw.rect(self.screen, color, (draw_rect.x, draw_rect.y, 5, draw_rect.height), border_radius=3)
+        label_color = WHITE
+        label = self.font_small.render(text, True, label_color)
+        self.screen.blit(label, label.get_rect(midleft=(draw_rect.x + 20, draw_rect.centery)))
+        state = self.font_tiny.render("ACT" if primary else "SEL", True, label_color if hovered else MUTED)
+        self.screen.blit(state, state.get_rect(midright=(draw_rect.right - 16, draw_rect.centery)))
+
+    def draw_reactor_core(self, center: pygame.Vector2) -> None:
+        """Draw the animated menu reactor with local supersampling."""
+        scale = 2
+        size = 448
+        local_center = pygame.Vector2(size / 2, size / 2)
+        reactor = pygame.Surface((size * scale, size * scale), pygame.SRCALPHA)
+        phase = self.cursor_phase * 1.8
+
+        def scaled_point(point: pygame.Vector2) -> tuple[int, int]:
+            return round(point.x * scale), round(point.y * scale)
+
+        for radius, color, width in ((178, CYAN, 2), (132, MAGENTA, 2), (82, WHITE, 1)):
+            arc_rect = pygame.Rect(
+                round((local_center.x - radius) * scale),
+                round((local_center.y - radius) * scale),
+                radius * 2 * scale,
+                radius * 2 * scale,
+            )
+            for start, stop in (
+                (phase, phase + math.pi * 1.35),
+                (phase + math.pi, phase + math.pi * 1.7),
+            ):
+                pygame.draw.arc(reactor, (*color, 34), arc_rect, start, stop, max(8, width * 5) * scale)
+                pygame.draw.arc(reactor, (*color, 84), arc_rect, start, stop, max(4, width * 2) * scale)
+                pygame.draw.arc(reactor, (*color, 255), arc_rect, start, stop, width * scale)
+
+        for index in range(12):
+            angle = phase * (1 if index % 2 else -0.55) + index * math.tau / 12
+            direction = pygame.Vector2(math.cos(angle), math.sin(angle))
+            outer = local_center + direction * 205
+            inner = local_center + direction * (188 if index % 3 else 172)
+            color = CYAN if index % 2 else MAGENTA
+            pygame.draw.line(reactor, (*color, 42), scaled_point(inner), scaled_point(outer), 7 * scale)
+            pygame.draw.line(reactor, (*color, 108), scaled_point(inner), scaled_point(outer), 3 * scale)
+            pygame.draw.line(reactor, (*color, 255), scaled_point(inner), scaled_point(outer), scale)
+
+        core_center = scaled_point(local_center)
+        pygame.draw.circle(reactor, (8, 13, 30, 255), core_center, 58 * scale)
+        pygame.draw.circle(reactor, (*WHITE, 44), core_center, 62 * scale, 8 * scale)
+        pygame.draw.circle(reactor, (*WHITE, 255), core_center, 58 * scale, 2 * scale)
+        pygame.draw.circle(reactor, (*CYAN, 40), core_center, 48 * scale, 8 * scale)
+        pygame.draw.circle(reactor, (*CYAN, 255), core_center, 44 * scale, 2 * scale)
+
+        reactor = pygame.transform.smoothscale(reactor, (size, size))
+        self.screen.blit(reactor, reactor.get_rect(center=(round(center.x), round(center.y))))
+
+        core_label = self.font_tiny.render("CORE", True, WHITE)
+        online_label = self.font_tiny.render("ONLINE", True, GREEN)
+        core_ink = core_label.get_bounding_rect()
+        online_ink = online_label.get_bounding_rect()
+        gap = 3
+        block_height = core_ink.height + gap + online_ink.height
+        ink_top = round(center.y - block_height / 2)
+        self.screen.blit(
+            core_label,
+            (round(center.x - core_ink.centerx), ink_top - core_ink.top),
+        )
+        self.screen.blit(
+            online_label,
+            (
+                round(center.x - online_ink.centerx),
+                ink_top + core_ink.height + gap - online_ink.top,
+            ),
+        )
 
     def draw_main_menu(self) -> None:
         self.draw_menu_background()
-        accent = pygame.Rect(WIDTH // 2 - 255, 118, 510, 5)
-        pygame.draw.rect(self.screen, CYAN, accent)
-        title = self.font_huge.render("双线火力", True, WHITE)
-        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 205)))
-        subtitle = self.font.render("八世界主线 + 双Boss终局挑战", True, YELLOW)
-        self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, 276)))
-        for index, (label, color) in enumerate((("开始游戏", GREEN), ("简易教学", CYAN), ("设置", PURPLE))):
+        self.blit_text("FIREPOWER", (70, 54), CYAN, self.font_small)
+        self.blit_text("火力过载", (68, 86), WHITE, self.font_huge)
+        self.blit_text("PHOTON OVERDRIVE", (72, 168), MAGENTA, self.font_large)
+        self.blit_text("在十个世界中校准火力、构筑卡组、击穿终局。", (74, 224), MUTED, self.font_small)
+
+        self.draw_reactor_core(pygame.Vector2(918, 260))
+        self.blit_text("十世界作战协议", (760, 491), WHITE, self.font_small)
+        self.blit_text("火力演算 / 人口增幅 / 卡组编译", (760, 525), MUTED, self.font_tiny)
+
+        for index, (label, color) in enumerate((("启动作战", MAGENTA), ("战术简报", CYAN), ("系统校准", PURPLE))):
             self.draw_menu_button(self.main_menu_button_rect(index), label, color)
-        self.blit_text("Enter / Space 快速开始", (WIDTH // 2 - 112, 620), MUTED, self.font_tiny)
+        self.blit_text("ENTER / SPACE  立即接入", (74, 548), CYAN, self.font_tiny)
+        self.draw_step_row(
+            pygame.Rect(72, 610, 1136, 28),
+            active_index=int(self.cursor_phase * 5) % 16,
+            labels=True,
+        )
+        self.blit_text("WORLD SEQUENCE", (72, 672), MUTED, self.font_tiny)
+        self.blit_text("CAMPAIGN 01-08", (468, 672), WHITE, self.font_tiny)
+        self.blit_text("ENDGAME 09-10", (1028, 672), MAGENTA, self.font_tiny)
 
     def draw_challenge_choice(self) -> None:
         self.draw_menu_background()
@@ -4067,11 +4278,11 @@ class Game:
 
     def draw_tutorial(self) -> None:
         self.draw_menu_background()
-        self.blit_text("测试员简易教学", (55, 40), WHITE, self.font_large)
+        self.blit_text("战术简报", (55, 36), WHITE, self.font_large)
         self.blit_text(
-            "目标：完成八世界主线，并选择是否挑战世界9、10终局Boss",
+            "先保持移动，再读威胁层级；人口、火力与卡组共同决定生存窗口。",
             (58, 105),
-            YELLOW,
+            CYAN,
             self.font_small,
         )
         sections = (
@@ -4082,41 +4293,41 @@ class Game:
                 "商店与构筑",
                 "击杀Boss获得金币；世界1～7及世界9结束后进入商店。\n最多携带5张卡。左键购买/出售，右键查看卡牌详情。",
             ),
-            ("测试提示", "Esc查看当前DPS、暴击和总音量；R可在暂停菜单重新开始。\n关注异常DPS、卡牌联动、碰撞和音频反馈。"),
+            ("战术终端", "Esc查看当前DPS、暴击和音量；R可在暂停菜单重新开始。\nF1开启开发者终端，用于快速验证构筑与战斗反馈。"),
             (
                 "胜利条件",
                 "前8个世界完成主线；之后可挑战世界9、10终局Boss。\n主线限时120秒，终局Boss世界限时90秒。",
             ),
         )
         for index, (heading, body) in enumerate(sections):
-            column = index % 2
-            row = index // 2
-            rect = pygame.Rect(55 + column * 610, 155 + row * 145, 570, 120)
-            pygame.draw.rect(self.screen, PANEL, rect, border_radius=10)
-            pygame.draw.rect(self.screen, CYAN if column == 0 else PURPLE, rect, 2, border_radius=10)
-            self.blit_text(heading, (rect.x + 20, rect.y + 14), YELLOW, self.font_small)
-            for line_index, line in enumerate(body.split("\n")):
-                self.blit_text(line, (rect.x + 20, rect.y + 50 + line_index * 27), WHITE, self.font_tiny)
-        self.draw_menu_button(self.menu_back_rect(), "返回", CYAN)
+            y = 150 + index * 73
+            color = CYAN if index < 4 else MAGENTA
+            key = pygame.Rect(56, y, 44, 44)
+            self.draw_ui_panel(key, fill=tuple(channel // 6 for channel in color), rim=color, radius=3)
+            number = self.font_numeric.render(f"{index + 1:02}", True, WHITE)
+            self.screen.blit(number, number.get_rect(center=key.center))
+            self.blit_text(heading, (122, y - 1), WHITE, self.font_small)
+            self.blit_text(body.replace("\n", "  "), (122, y + 27), MUTED, self.font_tiny)
+            self.draw_neon_line((122, y + 55), (1215, y + 55), color, 1, 5)
+        self.draw_menu_button(self.menu_back_rect(), "返回主终端", CYAN)
 
     def draw_settings(self) -> None:
         self.draw_menu_background()
-        self.blit_text("设置", (55, 40), WHITE, self.font_large)
-        self.blit_text("鼠标灵敏度范围 0.1-5.0，点击数字后可直接键盘输入", (58, 76), MUTED, self.font_small)
+        self.blit_text("系统校准", (55, 34), WHITE, self.font_large)
+        self.blit_text("所有参数即时写入作战终端；点击灵敏度数值可精确输入", (58, 82), CYAN, self.font_small)
 
         sensitivity_rect = pygame.Rect(270, 103, 850, 48)
-        pygame.draw.rect(self.screen, PANEL, sensitivity_rect, border_radius=8)
+        self.draw_ui_panel(sensitivity_rect, fill=PANEL, rim=CYAN, glass=True)
         self.blit_text("鼠标灵敏度", (sensitivity_rect.x + 22, sensitivity_rect.y + 13), WHITE, self.font_small)
         sensitivity_minus = self.settings_mouse_sensitivity_button_rect(-1)
         sensitivity_plus = self.settings_mouse_sensitivity_button_rect(1)
-        pygame.draw.rect(self.screen, GRID, sensitivity_minus, border_radius=7)
-        pygame.draw.rect(self.screen, GRID, sensitivity_plus, border_radius=7)
+        self.draw_ui_panel(sensitivity_minus, fill=PANEL_RAISED, rim=GRID, radius=6)
+        self.draw_ui_panel(sensitivity_plus, fill=PANEL_RAISED, rim=GRID, radius=6)
         self.blit_text("-", (sensitivity_minus.x + 17, sensitivity_minus.y + 5), WHITE, self.font)
         self.blit_text("+", (sensitivity_plus.x + 13, sensitivity_plus.y + 5), WHITE, self.font)
         value_rect = self.settings_mouse_sensitivity_value_rect()
-        pygame.draw.rect(self.screen, (14, 20, 32), value_rect, border_radius=7)
+        self.draw_ui_panel(value_rect, fill=(12, 17, 20), rim=CYAN if self.mouse_sensitivity_editing else GRID, radius=6)
         if self.mouse_sensitivity_editing:
-            pygame.draw.rect(self.screen, CYAN, value_rect, 2, border_radius=7)
             text = self.sensitivity_input_text + "|"
         else:
             text = f"{self.mouse_sensitivity:g}"
@@ -4124,12 +4335,12 @@ class Game:
         self.screen.blit(sensitivity, sensitivity.get_rect(center=value_rect.center))
 
         crosshair_rect = pygame.Rect(270, 160, 850, 52)
-        pygame.draw.rect(self.screen, PANEL, crosshair_rect, border_radius=8)
+        self.draw_ui_panel(crosshair_rect, fill=PANEL, rim=PURPLE, glass=True)
         self.blit_text("准星预设", (crosshair_rect.x + 22, crosshair_rect.y + 13), WHITE, self.font_small)
         crosshair_minus = self.settings_crosshair_button_rect(-1)
         crosshair_plus = self.settings_crosshair_button_rect(1)
-        pygame.draw.rect(self.screen, GRID, crosshair_minus, border_radius=7)
-        pygame.draw.rect(self.screen, GRID, crosshair_plus, border_radius=7)
+        self.draw_ui_panel(crosshair_minus, fill=PANEL_RAISED, rim=GRID, radius=6)
+        self.draw_ui_panel(crosshair_plus, fill=PANEL_RAISED, rim=GRID, radius=6)
         self.blit_text("<", (crosshair_minus.x + 17, crosshair_minus.y + 5), WHITE, self.font)
         self.blit_text(">", (crosshair_plus.x + 14, crosshair_plus.y + 5), WHITE, self.font)
         preview = self._render_crosshair_sprite(0.55)
@@ -4137,48 +4348,75 @@ class Game:
         preset_name = self.font_small.render(self.crosshair_preset_name(), True, CYAN)
         self.screen.blit(preset_name, (crosshair_rect.x + 128, crosshair_rect.y + 13))
 
-        self.blit_text("画面特效", (58, 218), WHITE, self.font_small)
+        self.draw_section_title("视觉增幅矩阵", (58, 214), MAGENTA)
         for index, (kind, label) in enumerate(self.settings_visual_rows()):
             y = self.settings_visual_y(index)
             x = self.settings_visual_x(index)
             rect = pygame.Rect(x, y, 390, 45)
-            pygame.draw.rect(self.screen, PANEL, rect, border_radius=8)
+            color = (CYAN, MAGENTA, PURPLE, CYAN, MAGENTA)[index]
+            self.draw_ui_panel(rect, fill=PANEL, rim=color, radius=5, glass=True)
             self.blit_text(label, (rect.x + 14, rect.y + 9), WHITE, self.font_small)
             minus = self.settings_visual_button_rect(index, -1)
             plus = self.settings_visual_button_rect(index, 1)
-            pygame.draw.rect(self.screen, GRID, minus, border_radius=7)
-            pygame.draw.rect(self.screen, GRID, plus, border_radius=7)
+            self.draw_ui_panel(minus, fill=PANEL_RAISED, rim=GRID, radius=6)
+            self.draw_ui_panel(plus, fill=PANEL_RAISED, rim=GRID, radius=6)
             self.blit_text("-", (minus.x + 14, minus.y + 3), WHITE, self.font)
             self.blit_text("+", (plus.x + 10, plus.y + 3), WHITE, self.font)
             value = self.font.render(f"{self.visual_effect_value(kind):.0%}", True, CYAN)
             self.screen.blit(value, value.get_rect(center=(rect.x + 298, rect.centery)))
+            meter = pygame.Rect(rect.x + 118, rect.bottom - 5, 190, 2)
+            pygame.draw.rect(self.screen, GRID, meter)
+            meter.width = round(meter.width * self.visual_effect_value(kind))
+            self.draw_neon_line(meter.topleft, meter.topright, color, 2, 5)
 
-        self.blit_text("声音", (58, 350), WHITE, self.font_small)
+        self.draw_section_title("声音通道", (58, 346), CYAN)
         for index, (kind, label) in enumerate(self.settings_volume_rows()):
             y = self.settings_audio_y(index)
             x = 55 if index < 4 else 650
             rect = pygame.Rect(x, y, 575, 48)
-            pygame.draw.rect(self.screen, PANEL, rect, border_radius=8)
+            color = CYAN if index < 4 else PURPLE
+            self.draw_ui_panel(rect, fill=PANEL, rim=color, radius=5, glass=True)
             self.blit_text(label, (rect.x + 18, rect.y + 12), WHITE, self.font_small)
             minus = self.settings_volume_button_rect(index, -1)
             plus = self.settings_volume_button_rect(index, 1)
-            pygame.draw.rect(self.screen, GRID, minus, border_radius=7)
-            pygame.draw.rect(self.screen, GRID, plus, border_radius=7)
+            self.draw_ui_panel(minus, fill=PANEL_RAISED, rim=GRID, radius=6)
+            self.draw_ui_panel(plus, fill=PANEL_RAISED, rim=GRID, radius=6)
             self.blit_text("-", (minus.x + 14, minus.y + 3), WHITE, self.font)
             self.blit_text("+", (plus.x + 10, plus.y + 3), WHITE, self.font)
             value = self.font.render(f"{self.volume_value(kind):.0%}", True, CYAN)
             self.screen.blit(value, value.get_rect(center=(rect.right - 150, rect.centery)))
-        self.draw_menu_button(self.menu_back_rect(), "返回", CYAN)
+            meter = pygame.Rect(rect.x + 180, rect.bottom - 5, 235, 2)
+            pygame.draw.rect(self.screen, GRID, meter)
+            meter.width = round(meter.width * self.volume_value(kind))
+            self.draw_neon_line(meter.topleft, meter.topright, color, 2, 4)
+        self.draw_menu_button(self.menu_back_rect(), "返回主终端", CYAN)
 
     def draw_arena(self) -> None:
-        pygame.draw.rect(self.screen, PANEL, (0, PLAY_TOP, WIDTH, HEIGHT - PLAY_TOP))
-        pygame.draw.line(self.screen, CYAN, (0, PLAY_TOP), (WIDTH, PLAY_TOP), 2)
+        arena_light = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        pygame.draw.circle(arena_light, (*CYAN, 13), (WIDTH - 140, 170), 380)
+        pygame.draw.circle(arena_light, (*MAGENTA, 11), (120, PLAY_TOP - 70), 310)
+        pygame.draw.rect(arena_light, (16, 26, 57, 208), (0, PLAY_TOP, WIDTH, HEIGHT - PLAY_TOP))
+        self.screen.blit(arena_light, (0, 0))
+
+        # A restrained technical grid keeps trajectories legible while the
+        # edge rails and scanner accents carry the high-energy identity.
         for x in range(0, WIDTH, 80):
             pygame.draw.line(self.screen, GRID, (x, 64), (x, HEIGHT), 1)
         for y in range(64, HEIGHT, 80):
             pygame.draw.line(self.screen, GRID, (0, y), (WIDTH, y), 1)
-        self.blit_text("全宽随机生成区", (18, 73), MUTED, self.font_small)
-        self.blit_text("玩家活动区域", (18, PLAY_TOP + 8), MUTED, self.font_small)
+        self.draw_neon_line((0, PLAY_TOP), (WIDTH, PLAY_TOP), CYAN, 2, 12)
+        pygame.draw.line(self.screen, MAGENTA, (0, 66), (188, 66), 2)
+        pygame.draw.line(self.screen, CYAN, (WIDTH - 188, PLAY_TOP - 1), (WIDTH, PLAY_TOP - 1), 3)
+
+        scan_x = int((self.cursor_phase * 72) % WIDTH)
+        scan = pygame.Surface((72, PLAY_TOP - 64), pygame.SRCALPHA)
+        for offset, alpha in ((0, 0), (18, 5), (36, 9), (54, 5), (71, 0)):
+            pygame.draw.line(scan, (*CYAN, alpha), (offset, 0), (offset, scan.get_height()))
+        self.screen.blit(scan, (scan_x - 36, 64))
+
+        self.blit_text("实体投送区 / ENTITY INGRESS", (18, 76), MUTED, self.font_tiny)
+        self.blit_text("机动甲板 / MANEUVER DECK", (18, PLAY_TOP + 12), MUTED, self.font_tiny)
+        self.blit_text("LIVE FIRESPACE", (WIDTH - 154, 76), MAGENTA, self.font_tiny)
 
     def draw_player(self) -> None:
         pygame.draw.circle(self.screen, CYAN, self.player, self.player_radius)
@@ -4293,14 +4531,26 @@ class Game:
         pygame.draw.rect(self.screen, color, fill, border_radius=4)
 
     def draw_hud(self) -> None:
-        pygame.draw.rect(self.screen, (10, 12, 19), (0, 0, WIDTH, 64))
-        self.blit_text(f"人口 {format_number(self.population)}", (18, 15), CYAN, self.font)
-        self.blit_text(f"金币 {self.gold}", (180, 15), YELLOW, self.font)
-        self.blit_text(f"世界 {self.world}/{MAX_WORLD}", (310, 15), WHITE, self.font)
+        glass = pygame.Surface((WIDTH, 64), pygame.SRCALPHA)
+        glass.fill(GLASS_TINT)
+        pygame.draw.line(glass, GLASS_RIM, (0, 1), (WIDTH, 1), 2)
+        self.screen.blit(glass, (0, 0))
+        self.draw_neon_line((0, 63), (WIDTH, 63), CYAN, 1, 10)
+
+        self.blit_text("人口", (18, 8), MUTED, self.font_tiny)
+        self.blit_text(format_number(self.population), (18, 28), CYAN, self.font_numeric)
+        pygame.draw.rect(self.screen, CYAN, (0, 0, 5, 64))
+        self.blit_text("金币", (150, 8), MUTED, self.font_tiny)
+        self.blit_text(str(self.gold), (150, 28), YELLOW, self.font_numeric)
+        self.blit_text("世界", (250, 8), MUTED, self.font_tiny)
+        self.blit_text(f"{self.world:02}/{MAX_WORLD:02}", (250, 28), WHITE, self.font_numeric)
         remaining = max(0, math.ceil(world_duration(self.world) - self.elapsed))
-        self.blit_text(f"截止 {remaining}s", (445, 15), RED if remaining <= 30 else WHITE, self.font)
-        self.blit_text(f"伤害 {self.current_damage():.1f}  射速 {self.current_fire_rate():.1f}/s", (610, 18), MUTED, self.font_small)
-        self.blit_text(f"参考DPS {format_number(world_dps_threshold(self.world))}", (825, 18), YELLOW, self.font_small)
+        self.blit_text("剩余", (358, 8), MUTED, self.font_tiny)
+        self.blit_text(f"{remaining:03}s", (358, 28), RED if remaining <= 30 else WHITE, self.font_numeric)
+        self.blit_text("伤害 / 射速", (478, 8), MUTED, self.font_tiny)
+        self.blit_text(f"{self.current_damage():.1f} / {self.current_fire_rate():.1f}", (478, 28), WHITE, self.font_numeric)
+        self.blit_text("目标 DPS", (680, 8), MUTED, self.font_tiny)
+        self.blit_text(format_number(world_dps_threshold(self.world)), (680, 28), YELLOW, self.font_numeric)
         final_boss = next((boss for boss in self.bosses if boss.kind == "big"), None)
         if self.world == 9 and final_boss is not None:
             shield = "护盾开" if any(enemy.elite for enemy in self.enemies) else "护盾关"
@@ -4317,24 +4567,31 @@ class Game:
                 if self.elapsed < 90
                 else "击杀大Boss！"
             )
-        self.blit_text(next_event, (1010, 18), YELLOW, self.font_small)
+        self.blit_text("下一威胁", (925, 8), MUTED, self.font_tiny)
+        threat_color = RED if remaining <= 30 or (final_boss and final_boss.windup_remaining is not None) else WHITE
+        self.blit_text(next_event, (925, 30), threat_color, self.font_tiny)
+        if threat_color == RED:
+            self.draw_neon_line((917, 7), (917, 55), RED, 2, 8)
+        progress = self.elapsed / max(1.0, world_duration(self.world))
+        self.draw_step_row(pygame.Rect(1105, 17, 158, 10), progress=progress, danger_from=12)
+        self.blit_text("PATTERN", (1105, 36), MUTED, self.font_tiny)
         if self.message_timer > 0:
             surface = self.font_small.render(self.message, True, YELLOW)
             rect = surface.get_rect(center=(WIDTH // 2, HEIGHT - 18)).inflate(20, 10)
-            pygame.draw.rect(self.screen, (8, 10, 16), rect, border_radius=8)
+            self.draw_ui_panel(rect, fill=(8, 10, 20), rim=YELLOW, radius=4, glass=True)
             self.screen.blit(surface, surface.get_rect(center=rect.center))
 
     def draw_shop(self) -> None:
-        self.screen.fill((12, 15, 24))
-        self.blit_text(f"世界 {self.world} 通关商店", (50, 35), WHITE, self.font_large)
+        self.draw_menu_background()
+        self.blit_text(f"世界 {self.world:02} · 装备编译器", (50, 30), WHITE, self.font_large)
         self.blit_text(f"金币 {self.gold}", (1035, 48), YELLOW, self.font)
-        self.blit_text("普通强化率15%；每个商品位独立有5%概率出现过载牌", (55, 115), MUTED, self.font_small)
+        self.blit_text("选择模块写入构筑；强化率 15% · 过载信号概率 5%", (55, 105), CYAN, self.font_small)
         enhance_names = {"population": "+5人口", "fire_rate": "+10%射速", "damage": "+1基础伤害"}
         for index, offer in enumerate(self.shop_offers):
             rect = self.card_rect(index)
             if offer.is_overload:
-                pygame.draw.rect(self.screen, (74, 18, 27), rect, border_radius=12)
-                pygame.draw.rect(self.screen, OVERLOAD, rect, 4, border_radius=12)
+                self.draw_ui_panel(rect, fill=(42, 8, 28), rim=MAGENTA, radius=7, glass=True)
+                self.draw_neon_line((rect.left, rect.top), (rect.right, rect.top), MAGENTA, 3, 14)
                 self.blit_text("过载", (rect.x + 18, rect.y + 16), OVERLOAD, self.font_small)
                 category = CATEGORY_SPECS.get(offer.overload_category, offer.overload_category)
                 label = self.font_large.render(category, True, WHITE)
@@ -4351,8 +4608,8 @@ class Game:
             if card is None:
                 continue
             color = RARITY_COLORS[card.rarity]
-            pygame.draw.rect(self.screen, PANEL, rect, border_radius=12)
-            pygame.draw.rect(self.screen, color, rect, 3, border_radius=12)
+            self.draw_ui_panel(rect, fill=PANEL, rim=color, radius=7, glass=True)
+            self.draw_neon_line((rect.left, rect.top), (rect.right, rect.top), color, 2, 10)
             self.blit_text(card.rarity, (rect.x + 18, rect.y + 16), color, self.font_small)
             price = self.card_purchase_price(card)
             self.blit_text(f"{price} 金币", (rect.right - 88, rect.y + 16), YELLOW, self.font_tiny)
@@ -4363,7 +4620,7 @@ class Game:
             self.draw_wrapped(card.description, pygame.Rect(rect.x + 18, rect.y + 125, rect.width - 36, 75), MUTED)
             self.blit_text("点击购买", (rect.x + 78, rect.bottom - 35), CYAN, self.font_small)
 
-        self.blit_text("永久默认属性（可重复购买）", (910, 105), MUTED, self.font_small)
+        self.blit_text("永久核心升级（可重复写入）", (910, 105), MUTED, self.font_small)
         attrs = (
             ("默认人口 +2", "population"),
             ("基础伤害 +1", "damage"),
@@ -4372,8 +4629,7 @@ class Game:
         for index, (label, key) in enumerate(attrs):
             rect = self.attribute_rect(index)
             price = attribute_price(self.attribute_purchases[key])
-            pygame.draw.rect(self.screen, PANEL, rect, border_radius=10)
-            pygame.draw.rect(self.screen, CYAN, rect, 2, border_radius=10)
+            self.draw_ui_panel(rect, fill=PANEL, rim=CYAN, radius=6, glass=True)
             self.blit_text(label, (rect.x + 16, rect.y + 13), WHITE, self.font_small)
             self.blit_text(f"等级 {self.attribute_purchases[key]} | {price} 金币", (rect.x + 16, rect.y + 44), YELLOW, self.font_tiny)
 
@@ -4383,7 +4639,7 @@ class Game:
         self.blit_text(f"{page_name}（拖动出售，右键查看详情）", (55, 445), MUTED, self.font_small)
         for index in range(slot_count):
             rect = self.slot_rect(index)
-            pygame.draw.rect(self.screen, PANEL, rect, border_radius=8)
+            self.draw_ui_panel(rect, fill=PANEL, rim=GRID, radius=5, glass=True)
             if index < len(collection):
                 owned = collection[index]
                 card = CARD_BY_KEY[owned.key]
@@ -4401,23 +4657,22 @@ class Game:
                 self.blit_text("空过载槽" if self.card_page == "overload" else "空卡槽", (rect.x + 35, rect.y + 50), MUTED, self.font_tiny)
 
         page_button = self.shop_page_button_rect()
-        pygame.draw.rect(self.screen, OVERLOAD if self.card_page == "normal" else BLUE, page_button, border_radius=8)
+        self.draw_ui_panel(page_button, fill=PANEL_RAISED, rim=MAGENTA if self.card_page == "normal" else BLUE, radius=5, glass=True)
         page_label = "查看过载卡槽" if self.card_page == "normal" else "查看普通卡槽"
         self.blit_text(page_label, (page_button.x + 20, page_button.y + 12), WHITE, self.font_small)
         sell_rect = self.shop_sell_rect()
-        pygame.draw.rect(self.screen, (55, 22, 28), sell_rect, border_radius=8)
-        pygame.draw.rect(self.screen, RED, sell_rect, 2, border_radius=8)
+        self.draw_ui_panel(sell_rect, fill=(38, 10, 24), rim=RED, radius=5, glass=True)
         sell_label = "将卡牌拖到这里出售（过载牌固定 20 金币）"
         self.blit_text(sell_label, (sell_rect.x + 70, sell_rect.y + 12), WHITE, self.font_small)
 
         refresh = pygame.Rect(910, 495, 150, 52)
         next_rect = pygame.Rect(1080, 495, 145, 52)
-        pygame.draw.rect(self.screen, BLUE, refresh, border_radius=8)
-        pygame.draw.rect(self.screen, GREEN, next_rect, border_radius=8)
+        self.draw_ui_panel(refresh, fill=(9, 18, 48), rim=BLUE, radius=5, glass=True)
+        self.draw_ui_panel(next_rect, fill=(8, 42, 37), rim=GREEN, radius=5, glass=True)
         charged = max(0, round(self.apply_stat(self.refresh_cost, "refresh_cost", TARGET_PLAYER)))
         self.blit_text(f"刷新 {charged}金", (refresh.x + 25, refresh.y + 13), WHITE, self.font_small)
         next_label = "挑战世界10" if self.world == 9 else "下一世界"
-        self.blit_text(next_label, (next_rect.x + 15, next_rect.y + 13), BG, self.font_small)
+        self.blit_text(next_label, (next_rect.x + 15, next_rect.y + 13), WHITE, self.font_small)
         if self.world == 9:
             next_population = (
                 self.population
@@ -4484,8 +4739,11 @@ class Game:
 
     def draw_overlay(self, title_text: str, detail: str) -> None:
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((5, 7, 12, 205))
+        overlay.fill((2, 3, 13, 218))
         self.screen.blit(overlay, (0, 0))
+        panel = pygame.Rect(260, 230, 760, 270)
+        self.draw_ui_panel(panel, fill=PANEL, rim=MAGENTA if "失败" in title_text else CYAN, radius=6, glass=True)
+        self.draw_neon_line((panel.left, panel.top), (panel.right, panel.top), MAGENTA if "失败" in title_text else CYAN, 3, 18)
         title = self.font_huge.render(title_text, True, WHITE)
         self.screen.blit(title, title.get_rect(center=(WIDTH // 2, HEIGHT // 2 - 45)))
         subtitle = self.font.render(detail, True, YELLOW)
@@ -4507,16 +4765,16 @@ class Game:
 
     def draw_pause_menu(self) -> None:
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((5, 7, 12, 215))
+        overlay.fill((2, 3, 13, 218))
         self.screen.blit(overlay, (0, 0))
 
         panel = pygame.Rect(WIDTH // 2 - 270, 55, 540, 610)
-        pygame.draw.rect(self.screen, PANEL, panel, border_radius=16)
-        pygame.draw.rect(self.screen, CYAN, panel, 3, border_radius=16)
+        self.draw_ui_panel(panel, fill=PANEL, rim=CYAN, radius=7, glass=True)
+        self.draw_neon_line((panel.left, panel.top), (panel.right, panel.top), MAGENTA, 3, 18)
 
-        title = self.font_large.render("游戏暂停", True, WHITE)
+        title = self.font_large.render("作战链路暂停", True, WHITE)
         self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 110)))
-        self.blit_text("当前局内属性", (panel.x + 45, 165), MUTED, self.font_small)
+        self.draw_section_title("当前火力遥测", (panel.x + 45, 158), MAGENTA)
 
         stats = (
             ("理论 DPS", format_number(self.current_dps()), YELLOW),
@@ -4529,7 +4787,7 @@ class Game:
             value_surface = self.font.render(value, True, color)
             self.screen.blit(value_surface, value_surface.get_rect(topright=(panel.right - 55, y)))
 
-        self.blit_text("音量", (panel.x + 45, 370), MUTED, self.font_small)
+        self.draw_section_title("音频通道", (panel.x + 45, 363), CYAN)
         for kind, label, value in (
             ("sfx", "枪声音效", self.sfx_volume),
             ("bgm", "背景音乐", self.bgm_volume),
@@ -4538,23 +4796,22 @@ class Game:
             self.blit_text(label, (panel.x + 55, y + 6), WHITE, self.font_small)
             minus = self.pause_volume_button_rect(kind, -1)
             plus = self.pause_volume_button_rect(kind, 1)
-            pygame.draw.rect(self.screen, GRID, minus, border_radius=7)
-            pygame.draw.rect(self.screen, GRID, plus, border_radius=7)
+            self.draw_ui_panel(minus, fill=PANEL_RAISED, rim=CYAN, radius=4)
+            self.draw_ui_panel(plus, fill=PANEL_RAISED, rim=CYAN, radius=4)
             self.blit_text("-", (minus.x + 15, minus.y + 3), WHITE, self.font)
             self.blit_text("+", (plus.x + 12, plus.y + 3), WHITE, self.font)
             volume = self.font_small.render(f"{value:.0%}", True, CYAN)
             self.screen.blit(volume, volume.get_rect(center=(WIDTH // 2 + 91, y + 19)))
 
-        self.blit_text("Esc 继续游戏", (panel.x + 175, 525), WHITE, self.font_small)
-        self.blit_text("F1 开发者测试面板", (panel.x + 45, 498), CYAN, self.font_small)
+        self.blit_text("ESC  恢复作战链路", (panel.x + 175, 525), WHITE, self.font_small)
+        self.blit_text("F1  开发者诊断终端", (panel.x + 45, 498), CYAN, self.font_small)
         restart = self.pause_restart_rect()
-        pygame.draw.rect(self.screen, RED, restart, border_radius=10)
+        self.draw_ui_panel(restart, fill=(46, 8, 24), rim=RED, radius=5, glass=True)
         restart_label = self.font.render("重新开始  R", True, WHITE)
         self.screen.blit(restart_label, restart_label.get_rect(center=restart.center))
 
         main_menu = self.pause_main_menu_rect()
-        pygame.draw.rect(self.screen, GRID, main_menu, border_radius=10)
-        pygame.draw.rect(self.screen, MUTED, main_menu, 2, border_radius=10)
+        self.draw_ui_panel(main_menu, fill=PANEL_RAISED, rim=PURPLE, radius=5, glass=True)
         main_menu_label = self.font.render("返回主菜单", True, WHITE)
         self.screen.blit(main_menu_label, main_menu_label.get_rect(center=main_menu.center))
 
