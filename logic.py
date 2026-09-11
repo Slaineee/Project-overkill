@@ -65,11 +65,11 @@ def attribute_price(purchases: int, base_price: int = 4) -> int:
     return math.ceil(base_price * 1.45 ** max(0, purchases))
 
 
-WORLD_MULTIPLIERS = (1.0, 1.25, 1.5, 1.8, 2.2, 2.7, 3.3, 4.0)
+WORLD_MULTIPLIERS = (1.0, 1.25, 1.5, 1.8, 2.2, 2.7, 3.3, 4.0, 5.0, 6.25)
 
 
 def world_multiplier(world: int) -> float:
-    index = min(8, max(1, world)) - 1
+    index = min(10, max(1, world)) - 1
     return WORLD_MULTIPLIERS[index]
 
 
@@ -82,6 +82,8 @@ WORLD_DPS_THRESHOLDS = (
     2_000_000,
     4_000_000,
     8_000_000,
+    300_000_000,
+    900_000_000,
 )
 
 WORLD_TARGET_HEALTH = (
@@ -93,16 +95,18 @@ WORLD_TARGET_HEALTH = (
     {"normal": 1_000, "elite": 30_000, "special": 937_500, "small": 3_750_000, "medium": 7_500_000, "big": 30_000_000},
     {"normal": 1_800, "elite": 54_000, "special": 1_875_000, "small": 7_500_000, "medium": 15_000_000, "big": 60_000_000},
     {"normal": 3_000, "elite": 90_000, "special": 3_750_000, "small": 15_000_000, "medium": 30_000_000, "big": 120_000_000},
+    {"normal": 5_000, "elite": 150_000, "special": 562_500_000, "small": 2_250_000_000, "medium": 4_500_000_000, "big": 18_000_000_000},
+    {"normal": 8_000, "elite": 240_000, "special": 2_250_000_000, "small": 9_000_000_000, "medium": 18_000_000_000, "big": 72_000_000_000},
 )
 
 
 def world_dps_threshold(world: int) -> int:
-    index = min(8, max(1, world)) - 1
+    index = min(10, max(1, world)) - 1
     return WORLD_DPS_THRESHOLDS[index]
 
 
 def world_target_health(world: int, target: str) -> float:
-    index = min(8, max(1, world)) - 1
+    index = min(10, max(1, world)) - 1
     try:
         return float(WORLD_TARGET_HEALTH[index][target])
     except KeyError as error:
@@ -110,9 +114,19 @@ def world_target_health(world: int, target: str) -> float:
 
 
 def boss_windup_move_factor(world: int) -> float:
-    """Scale windup movement from 10% in world 1 to 50% in world 8."""
-    clamped_world = min(8, max(1, world))
-    return 0.10 + (clamped_world - 1) * (0.40 / 7)
+    """Scale windup movement from 10% in world 1 to 60% in world 10."""
+    clamped_world = min(10, max(1, world))
+    if clamped_world <= 8:
+        return 0.10 + (clamped_world - 1) * (0.40 / 7)
+    return 0.50 + (clamped_world - 8) * 0.05
+
+
+def world_duration(world: int) -> float:
+    return 90.0 if world >= 9 else 120.0
+
+
+def world_boss_spawn_time(world: int) -> float:
+    return 0.0 if world >= 9 else 90.0
 
 
 def execution_ready(current: float, maximum: float, threshold: float) -> bool:

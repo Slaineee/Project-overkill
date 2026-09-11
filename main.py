@@ -5,6 +5,7 @@ import os
 import json
 import random
 import sys
+import copy
 from itertools import count
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -36,6 +37,8 @@ from logic import (
     gate_steps,
     shot_damage,
     world_dps_threshold,
+    world_boss_spawn_time,
+    world_duration,
     world_target_health,
 )
 
@@ -44,6 +47,8 @@ WIDTH, HEIGHT = 1280, 720
 PLAY_TOP = int(HEIGHT * 0.70)
 FPS = 60
 WORLD_DURATION = 120.0
+MAX_WORLD = 10
+FINAL_CHALLENGE_WORLDS = (9, 10)
 
 BG = (15, 18, 27)
 PANEL = (27, 32, 46)
@@ -64,6 +69,55 @@ CURSOR_TRAIL_MAX_AGE = 0.42
 CURSOR_TRAIL_CAP = 30
 CURSOR_PARTICLE_CAP = 140
 CURSOR_PALETTE = (CYAN, (96, 255, 255), BLUE, PURPLE, WHITE)
+CROSSHAIR_PRESETS = (
+    {"key": "classic", "name": "经典环形", "palette": CURSOR_PALETTE},
+    {"key": "osu", "name": "OSU 流光", "palette": (CYAN, WHITE, (96, 255, 255), BLUE)},
+    {"key": "neon", "name": "霓虹十字", "palette": (PURPLE, CYAN, (255, 96, 220), WHITE)},
+    {"key": "void", "name": "虚空三角", "palette": (PURPLE, BLUE, (120, 80, 255), WHITE)},
+    {"key": "hex", "name": "六边形脉冲", "palette": (ORANGE, YELLOW, (255, 220, 120), WHITE)},
+)
+CROSSHAIR_BOX = 72
+CROSSHAIR_SUPERSAMPLE = 2
+DEATH_PARTICLE_CAP = 360
+BLOOD_STAIN_CAP = 96
+SHAKE_STRENGTH_CAP = 18.0
+GLOW_LEVEL_SCALES = (2, 4, 8)
+KILL_CHANNEL_IDS = (3, 4, 5, 8)
+BOSS_KILL_CHANNEL_ID = 7
+BOSS_KILL_VOLUME_BOOST = 1.20
+KILL_TAIL_DUCKING = 1.20
+KILL_SOUND_FADE_IN_MS = 8
+RANK_CHANNEL_ID = 9
+RANK_SOUND_SEGMENTS = {
+    "Overkill": (0.00, 3.85),
+    "S": (4.15, 6.75),
+    "A": (8.65, 11.20),
+    "B": (12.60, 15.10),
+    "C": (16.14, 18.86),
+    "D": (19.25, 21.10),
+}
+OVERKILL_STUTTER_RANGE = (0.055, 0.255)
+OVERKILL_STUTTER_GAP = 0.06
+OVERKILL_STUTTER_COUNT = 4
+SETTLEMENT_SLOWMO_DURATION = 1.0
+SETTLEMENT_SLOWMO_SCALE = 0.25
+SETTLEMENT_PANEL_DURATION = 0.45
+SETTLEMENT_PANEL_Y = 90
+SETTLEMENT_FIRST_ROW_DELAY = 0.35
+SETTLEMENT_ROW_INTERVAL = 0.55
+SETTLEMENT_SCORE_DELAY = 0.55
+SETTLEMENT_RANK_DROP_DURATION = 0.38
+SETTLEMENT_BUTTON_DELAY = 0.75
+SETTLEMENT_RANK_IMPACT_SCALE = 1.18
+SETTLEMENT_SCORE_IMPACT_VOLUME_BOOST = 1.25
+SETTLEMENT_RANK_THRESHOLDS = (
+    ("Overkill", 92, (255, 55, 70)),
+    ("S", 78, YELLOW),
+    ("A", 60, GREEN),
+    ("B", 38, BLUE),
+    ("C", 20, MUTED),
+    ("D", 0, (116, 88, 96)),
+)
 OVERLOAD = (255, 55, 70)
 OVERLOAD_CHANCE = 0.05
 OVERLOAD_EXCHANGE_COST = 5
@@ -102,6 +156,7 @@ class Mode(Enum):
     PAUSED = auto()
     GAME_OVER = auto()
     VICTORY = auto()
+    CHALLENGE_CHOICE = auto()
 
 
 @dataclass
@@ -167,6 +222,46 @@ class CursorParticle:
     max_life: float
     size: float
     color: tuple[int, int, int]
+
+
+@dataclass
+class DeathParticle:
+    position: pygame.Vector2
+    velocity: pygame.Vector2
+    life: float
+    max_life: float
+    radius: float
+
+
+@dataclass
+class BloodStain:
+    position: pygame.Vector2
+    points: tuple[pygame.Vector2, ...]
+    droplets: tuple[tuple[pygame.Vector2, float], ...]
+    life: float
+    max_life: float
+
+
+@dataclass
+class SettlementRow:
+    key: str
+    label: str
+    value_text: str
+    detail_text: str
+    magnitude: float
+    color: tuple[int, int, int]
+
+
+@dataclass
+class SettlementState:
+    phase: str
+    timer: float
+    row_index: int
+    rows: list[SettlementRow]
+    score: int
+    rank: str
+    panel_y: float
+    pop_timer: float
 
 
 @dataclass
@@ -252,13 +347,37 @@ class Boss:
     windup_remaining: float | None = None
     shoot_timer: float = 1.5
     windup_move_factor: float = 0.10
+    variant: str = "standard"
+    phase: int = 1
+    rage_stacks: int = 0
+    pattern_index: int = 0
+    roam_direction: pygame.Vector2 = field(
+        default_factory=lambda: pygame.Vector2(1.0, 0.35).normalize()
+    )
+
+    @property
+    def effective_speed(self) -> float:
+        return self.speed * (1.0 + 0.05 * self.rage_stacks)
 
     def update(self, dt: float, player: pygame.Vector2) -> bool:
         if self.kind != "big":
-            self.position.y += self.speed * dt
+            self.position.y += self.effective_speed * dt
+            return False
+        if self.variant != "standard" and self.phase == 1:
+            self.position += self.roam_direction * self.effective_speed * dt
+            min_x = self.radius + 10
+            max_x = WIDTH - self.radius - 10
+            min_y = self.radius + 10
+            max_y = PLAY_TOP - self.radius - 20
+            if self.position.x <= min_x or self.position.x >= max_x:
+                self.position.x = max(min_x, min(max_x, self.position.x))
+                self.roam_direction.x *= -1
+            if self.position.y <= min_y or self.position.y >= max_y:
+                self.position.y = max(min_y, min(max_y, self.position.y))
+                self.roam_direction.y *= -1
             return False
         if self.windup_remaining is not None:
-            self.position += normalized(player - self.position) * self.speed * self.windup_move_factor * dt
+            self.position += normalized(player - self.position) * self.effective_speed * self.windup_move_factor * dt
             self.windup_remaining -= dt
             if self.windup_remaining <= 0:
                 hit_player = self.position.distance_to(player) <= self.attack_range
@@ -268,7 +387,7 @@ class Boss:
         if self.position.distance_to(player) <= self.attack_range:
             self.windup_remaining = self.windup_duration
         else:
-            self.position += normalized(player - self.position) * self.speed * dt
+            self.position += normalized(player - self.position) * self.effective_speed * dt
         return False
 
 
@@ -304,6 +423,12 @@ class ShopOffer:
         return bool(self.overload_category)
 
 
+@dataclass
+class ChallengeCheckpoint:
+    run_state: dict[str, object]
+    rng_state: object
+
+
 class Game:
     _audio_cache: tuple[object, ...] | None = None
 
@@ -311,7 +436,7 @@ class Game:
         os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_WARP", "0")
         pygame.mixer.pre_init(44100, -16, 2, 256)
         pygame.init()
-        pygame.display.set_caption("双线火力 - 八世界原型")
+        pygame.display.set_caption("双线火力 - 十世界终局挑战")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.font_tiny = load_font(16)
@@ -322,17 +447,57 @@ class Game:
         self.rng = random.Random()
         self.audio_rng = random.Random()
         self.cursor_rng = random.Random()
+        self.visual_rng = random.Random()
         self.running = True
         self.mouse_sensitivity = 1.0
         self.aim_position = pygame.Vector2(WIDTH / 2, HEIGHT / 2)
+        self.crosshair_preset = "classic"
         self.mouse_sensitivity_editing = False
         self.sensitivity_input_text = ""
+        self.dev_panel_open = False
+        self.dev_editing_field: str | None = None
+        self.dev_input_text = ""
         self.cursor_time = 0.0
         self.cursor_phase = 0.0
         self.cursor_trail: list[tuple[float, pygame.Vector2]] = []
         self.cursor_particles: list[CursorParticle] = []
         self.cursor_spawn_timer = 0.0
         self.last_cursor_pos: pygame.Vector2 | None = None
+        self.cursor_glow_small_surface = pygame.Surface((WIDTH // 4, HEIGHT // 4))
+        self.cursor_glow_surface = pygame.Surface((WIDTH, HEIGHT))
+        self.shake_intensity = 0.7
+        self.glow_brightness = 0.4
+        self.glow_spread = 0.55
+        self.glow_opacity = 0.6
+        self.glow_feather = 0.7
+        self.shake_strength = 0.0
+        self.shake_timer = 0.0
+        self.shake_duration = 0.0
+        self.kill_combo = 0
+        self.kill_combo_timer = 0.0
+        self.blood_stains: list[BloodStain] = []
+        self.death_particles: list[DeathParticle] = []
+        self.settlement: SettlementState | None = None
+        self.settlement_particles: list[DeathParticle] = []
+        self.settlement_rank_cache: dict[tuple[str, tuple[int, int, int]], pygame.Surface] = {}
+        self.total_damage_dealt = 0.0
+        self.world_boss_gold = 0
+        self.world_interest = 0
+        self.challenge_checkpoint: ChallengeCheckpoint | None = None
+        self.population_basis = 1
+        self.challenge_world_growth_bonus = 0
+        self.challenge_shop_population_bonus = 0
+        self.challenge_shop_card_credits: dict[int, int] = {}
+        self.visual_effect_layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        self.glow_source_surface = pygame.Surface((WIDTH, HEIGHT))
+        self.glow_cache = tuple(
+            (
+                pygame.Surface((WIDTH // scale, HEIGHT // scale)),
+                pygame.Surface((WIDTH // scale, HEIGHT // scale)),
+                pygame.Surface((WIDTH, HEIGHT)),
+            )
+            for scale in GLOW_LEVEL_SCALES
+        )
         self.sfx_volume = 0.7
         self.bgm_volume = 0.4
         self.effect_volumes = {
@@ -341,13 +506,22 @@ class Game:
             "kill": 1.0,
             "gate_hit": 1.0,
             "gate_collect": 1.0,
+            "settlement": 1.0,
         }
         self.audio_available = False
         self.shot_sound: pygame.mixer.Sound | None = None
         self.kill_sounds: tuple[pygame.mixer.Sound, ...] = ()
+        self.kill_channels: tuple[pygame.mixer.Channel, ...] = ()
+        self.boss_kill_channel: pygame.mixer.Channel | None = None
+        self.kill_channel_cursor = 0
         self.enemy_hit_sound: pygame.mixer.Sound | None = None
         self.gate_hit_sound: pygame.mixer.Sound | None = None
         self.gate_collect_sound: pygame.mixer.Sound | None = None
+        self.settlement_slam_sound: pygame.mixer.Sound | None = None
+        self.settlement_score_sound: pygame.mixer.Sound | None = None
+        self.rank_sounds: dict[str, pygame.mixer.Sound] = {}
+        self.rank_channel: pygame.mixer.Channel | None = None
+        self.settlement_channel: pygame.mixer.Channel | None = None
         self.bgm_tracks: tuple[pygame.mixer.Sound, ...] = ()
         self.bgm_channels: tuple[pygame.mixer.Channel, ...] = ()
         self.bgm_track_index = 0
@@ -363,8 +537,9 @@ class Game:
             if pygame.mixer.get_init() is None:
                 pygame.mixer.init(44100, -16, 2, 256)
             pygame.mixer.set_num_channels(max(16, pygame.mixer.get_num_channels()))
-            pygame.mixer.set_reserved(4)
+            pygame.mixer.set_reserved(10)
             if Game._audio_cache is None:
+                rank_sheet = pygame.mixer.Sound(asset_path("SFX/Ranks.mp3"))
                 Game._audio_cache = (
                     pygame.mixer.Sound(asset_path("SFX/shot1.mp3")),
                     (
@@ -378,6 +553,7 @@ class Game:
                     pygame.mixer.Sound(asset_path("SFX/enemy_hit.wav")),
                     pygame.mixer.Sound(asset_path("SFX/gate_hit.wav")),
                     pygame.mixer.Sound(asset_path("SFX/gate_collect.wav")),
+                    self.split_rank_sounds(rank_sheet),
                 )
             (
                 self.shot_sound,
@@ -386,9 +562,15 @@ class Game:
                 self.enemy_hit_sound,
                 self.gate_hit_sound,
                 self.gate_collect_sound,
+                self.rank_sounds,
             ) = Game._audio_cache
+            self.settlement_slam_sound = self.synth_impact_sound(150.0, 55.0, 0.18, 0.9)
+            self.settlement_score_sound = self.synth_impact_sound(105.0, 36.0, 0.55, 1.0)
             self.shot_channel = pygame.mixer.Channel(2)
-            self.kill_channel = pygame.mixer.Channel(3)
+            self.kill_channels = tuple(pygame.mixer.Channel(channel_id) for channel_id in KILL_CHANNEL_IDS)
+            self.boss_kill_channel = pygame.mixer.Channel(BOSS_KILL_CHANNEL_ID)
+            self.settlement_channel = pygame.mixer.Channel(6)
+            self.rank_channel = pygame.mixer.Channel(RANK_CHANNEL_ID)
             self.bgm_channels = (pygame.mixer.Channel(0), pygame.mixer.Channel(1))
             self.audio_available = True
             self.apply_audio_volumes()
@@ -400,9 +582,89 @@ class Game:
         if not self.audio_available:
             return
         self.shot_channel.set_volume(self.effective_sfx_volume("shot"))
-        self.kill_channel.set_volume(self.effective_sfx_volume("kill"))
+        for channel in self.kill_channels:
+            channel.set_volume(self.effective_sfx_volume("kill"))
+        if self.boss_kill_channel is not None:
+            self.boss_kill_channel.set_volume(
+                min(1.0, self.effective_sfx_volume("kill") * BOSS_KILL_VOLUME_BOOST)
+            )
+        if self.settlement_channel is not None:
+            self.settlement_channel.set_volume(self.effective_sfx_volume("settlement"))
+        if self.rank_channel is not None:
+            self.rank_channel.set_volume(self.effective_sfx_volume("settlement"))
         for channel in self.bgm_channels:
             channel.set_volume(self.bgm_volume)
+
+    @staticmethod
+    def synth_impact_sound(
+        start_freq: float,
+        end_freq: float,
+        duration: float,
+        gain: float,
+    ) -> pygame.mixer.Sound | None:
+        try:
+            import numpy as np
+
+            rate = 44100
+            count = int(rate * duration)
+            t = np.linspace(0.0, duration, count, endpoint=False)
+            freq = np.linspace(start_freq, end_freq, count)
+            phase = 2.0 * np.pi * np.cumsum(freq) / rate
+            noise = np.random.default_rng(7).uniform(-0.5, 0.5, count)
+            envelope = np.exp(-t * 16.0)
+            wave = (np.sin(phase) + noise * np.exp(-t * 60.0)) * envelope
+            wave *= gain * (32767 * 0.6) / max(1e-9, float(np.max(np.abs(wave))))
+            stereo = np.repeat(wave[:, None].astype(np.int16), 2, axis=1)
+            return pygame.mixer.Sound(buffer=stereo.tobytes())
+        except (ImportError, ValueError, pygame.error):
+            return None
+
+    @staticmethod
+    def split_rank_sounds(rank_sheet: pygame.mixer.Sound) -> dict[str, pygame.mixer.Sound]:
+        mixer_init = pygame.mixer.get_init()
+        if mixer_init is None:
+            return {}
+        frequency, sample_format, channels = mixer_init
+        frame_size = max(1, abs(sample_format) // 8) * channels
+        raw = rank_sheet.get_raw()
+        sounds: dict[str, pygame.mixer.Sound] = {}
+
+        def clip_bytes(start: float, end: float) -> bytes:
+            start_byte = round(start * frequency) * frame_size
+            end_byte = min(len(raw), round(end * frequency) * frame_size)
+            return raw[start_byte:end_byte]
+
+        for rank, (start, end) in RANK_SOUND_SEGMENTS.items():
+            sounds[rank] = pygame.mixer.Sound(buffer=clip_bytes(start, end))
+
+        onset = clip_bytes(*OVERKILL_STUTTER_RANGE)
+        silence = bytes(round(OVERKILL_STUTTER_GAP * frequency) * frame_size)
+        full_overkill = clip_bytes(*RANK_SOUND_SEGMENTS["Overkill"])
+        sounds["Overkill"] = pygame.mixer.Sound(
+            buffer=(onset + silence) * OVERKILL_STUTTER_COUNT + full_overkill
+        )
+        return sounds
+
+    def play_settlement_impact(self, big: bool = False) -> None:
+        if not self.audio_available or self.settlement_channel is None:
+            return
+        sound = self.settlement_score_sound if big else self.settlement_slam_sound
+        if sound is None:
+            return
+        volume = self.effective_sfx_volume("settlement")
+        if big:
+            volume = min(1.0, volume * SETTLEMENT_SCORE_IMPACT_VOLUME_BOOST)
+        self.settlement_channel.set_volume(volume)
+        self.settlement_channel.play(sound)
+
+    def play_settlement_rank_sound(self) -> None:
+        if self.settlement is None or not self.audio_available or self.rank_channel is None:
+            return
+        sound = self.rank_sounds.get(self.settlement.rank)
+        if sound is None:
+            return
+        self.rank_channel.set_volume(self.effective_sfx_volume("settlement"))
+        self.rank_channel.play(sound)
 
     def effective_sfx_volume(self, kind: str) -> float:
         return self.sfx_volume * self.effect_volumes[kind]
@@ -445,6 +707,29 @@ class Game:
             self.mouse_sensitivity = max(
                 0.1, min(5.0, float(data.get("mouse_sensitivity", self.mouse_sensitivity)))
             )
+            crosshair = data.get("crosshair_preset")
+            if isinstance(crosshair, str) and any(
+                preset["key"] == crosshair for preset in CROSSHAIR_PRESETS
+            ):
+                self.crosshair_preset = crosshair
+            self.shake_intensity = max(
+                0.0, min(1.0, float(data.get("shake_intensity", self.shake_intensity)))
+            )
+            legacy_glow = data.get("glow_intensity")
+            if legacy_glow is not None and "glow_opacity" not in data:
+                self.glow_opacity = max(0.0, min(1.0, float(legacy_glow)))
+            self.glow_brightness = max(
+                0.0, min(1.0, float(data.get("glow_brightness", self.glow_brightness)))
+            )
+            self.glow_spread = max(
+                0.0, min(1.0, float(data.get("glow_spread", self.glow_spread)))
+            )
+            self.glow_opacity = max(
+                0.0, min(1.0, float(data.get("glow_opacity", self.glow_opacity)))
+            )
+            self.glow_feather = max(
+                0.0, min(1.0, float(data.get("glow_feather", self.glow_feather)))
+            )
         except (TypeError, ValueError):
             return
 
@@ -454,6 +739,12 @@ class Game:
             "sfx_volume": self.sfx_volume,
             "effect_volumes": dict(self.effect_volumes),
             "mouse_sensitivity": self.mouse_sensitivity,
+            "crosshair_preset": self.crosshair_preset,
+            "shake_intensity": self.shake_intensity,
+            "glow_brightness": self.glow_brightness,
+            "glow_spread": self.glow_spread,
+            "glow_opacity": self.glow_opacity,
+            "glow_feather": self.glow_feather,
         }
         try:
             settings_path().parent.mkdir(parents=True, exist_ok=True)
@@ -478,10 +769,41 @@ class Game:
             channel.play(sound)
 
     def play_kill_sound(self) -> None:
-        if not self.audio_available or not self.kill_sounds:
+        if not self.audio_available or not self.kill_sounds or not self.kill_channels:
             return
-        self.kill_channel.set_volume(self.effective_sfx_volume("kill"))
-        self.kill_channel.play(self.audio_rng.choice(self.kill_sounds))
+        channel_count = len(self.kill_channels)
+        selected_index = self.kill_channel_cursor
+        for offset in range(channel_count):
+            candidate_index = (self.kill_channel_cursor + offset) % channel_count
+            if not self.kill_channels[candidate_index].get_busy():
+                selected_index = candidate_index
+                break
+        selected = self.kill_channels[selected_index]
+        self.kill_channel_cursor = (selected_index + 1) % channel_count
+
+        volume = self.effective_sfx_volume("kill")
+        for channel in self.kill_channels:
+            if channel is not selected and channel.get_busy():
+                channel.set_volume(volume * KILL_TAIL_DUCKING)
+        selected.set_volume(volume)
+        selected.play(
+            self.audio_rng.choice(self.kill_sounds),
+            fade_ms=KILL_SOUND_FADE_IN_MS,
+        )
+
+    def play_boss_kill_sound(self) -> None:
+        if (
+            not self.audio_available
+            or not self.kill_sounds
+            or self.boss_kill_channel is None
+        ):
+            return
+        volume = min(1.0, self.effective_sfx_volume("kill") * BOSS_KILL_VOLUME_BOOST)
+        self.boss_kill_channel.set_volume(volume)
+        self.boss_kill_channel.play(
+            self.audio_rng.choice(self.kill_sounds),
+            fade_ms=KILL_SOUND_FADE_IN_MS,
+        )
 
     def update_audio(self, dt: float) -> None:
         if not self.audio_available or not self.bgm_tracks:
@@ -522,18 +844,56 @@ class Game:
         self.dragging_card: OwnedCard | None = None
         self.dragging_from = ""
         self.death_reason = ""
+        self.challenge_checkpoint = None
+        self.challenge_world_growth_bonus = 0
+        self.challenge_shop_population_bonus = 0
+        self.challenge_shop_card_credits = {}
         self.start_world()
 
-    def start_world(self) -> None:
+    def starting_population_value(self, world: int | None = None) -> int:
+        previous_world = self.world
+        if world is not None:
+            self.world = world
+        try:
+            value = round(
+                self.apply_stat(
+                    self.default_population,
+                    "starting_population",
+                    TARGET_PLAYER,
+                )
+            )
+            value += sum(
+                5 for owned in self.equipped_cards if owned.enhancement == "population"
+            )
+            return max(1, value)
+        finally:
+            self.world = previous_world
+
+    def population_growth_between_worlds(self, from_world: int, to_world: int) -> int:
+        return max(
+            0,
+            self.starting_population_value(to_world)
+            - self.starting_population_value(from_world),
+        )
+
+    def start_world(
+        self,
+        carried_population: int | None = None,
+        population_bonus: int = 0,
+    ) -> None:
         self.mode = Mode.PLAYING
         self.player = pygame.Vector2(WIDTH / 2, HEIGHT - 90)
         self.player_radius = 22
-        self.population = round(self.apply_stat(self.default_population, "starting_population", TARGET_PLAYER))
-        self.population += sum(5 for owned in self.equipped_cards if owned.enhancement == "population")
+        self.population_basis = self.starting_population_value()
+        self.population = (
+            self.population_basis
+            if carried_population is None
+            else max(1, carried_population + population_bonus)
+        )
         self.population_peak = self.population
         self.elapsed = 0.0
         self.enemy_timer = 1.0
-        self.elite_timer = 18.0
+        self.elite_timer = 6.0 if self.world == 9 else 18.0
         self.gate_timer = 2.0
         self.fire_timer = 0.0
         self.shot_streak = 0.0
@@ -549,7 +909,7 @@ class Game:
         self.small_boss_time = self.rng.uniform(25.0, 30.0)
         self.small_spawned = False
         self.medium_spawned = False
-        self.big_spawned = False
+        self.big_spawned = self.world in FINAL_CHALLENGE_WORLDS
         self.bullets: list[Bullet] = []
         self.enemy_bullets: list[EnemyBullet] = []
         self.enemies: list[Enemy] = []
@@ -558,7 +918,14 @@ class Game:
         self.temp_damage_bonus = 0.0
         self.temp_fire_rate_bonus = 0.0
         self.temp_buff_timer = 0.0
-        self.message = f"世界 {self.world}/8：120秒内击杀90秒出现的大Boss"
+        if self.world in FINAL_CHALLENGE_WORLDS:
+            boss_title = "终局统帅" if self.world == 9 else "吞门者"
+            self.message = f"世界 {self.world}/{MAX_WORLD}：{boss_title}已登场，90秒内击杀"
+        else:
+            self.message = (
+                f"世界 {self.world}/{MAX_WORLD}："
+                "120秒内击杀90秒出现的大Boss"
+            )
         self.message_timer = 5.0
         self.world_start_kills = self.total_kills
         self.reset_world_effect_runtime()
@@ -571,7 +938,84 @@ class Game:
         self.cursor_particles = []
         self.cursor_spawn_timer = 0.0
         self.last_cursor_pos = None
+        self.shake_strength = 0.0
+        self.shake_timer = 0.0
+        self.shake_duration = 0.0
+        self.kill_combo = 0
+        self.kill_combo_timer = 0.0
+        self.blood_stains = []
+        self.death_particles = []
+        self.settlement = None
+        self.settlement_particles = []
+        self.total_damage_dealt = 0.0
+        self.world_boss_gold = 0
+        self.world_interest = 0
+        if self.world == 9:
+            self.spawn_boss("big", "commander")
+        elif self.world == 10:
+            self.spawn_boss("big", "devourer")
         self.sync_mouse_mode()
+
+    def save_challenge_checkpoint(self) -> None:
+        fields = (
+            "run_id",
+            "balance_log_error",
+            "world",
+            "gold",
+            "total_kills",
+            "rapid_reload_kills",
+            "equipped_cards",
+            "overload_cards",
+            "effect_runtime",
+            "attribute_purchases",
+            "default_population",
+            "default_damage",
+            "default_fire_rate",
+            "shop_round",
+            "population",
+            "population_basis",
+        )
+        state = {name: copy.deepcopy(getattr(self, name)) for name in fields}
+        self.challenge_checkpoint = ChallengeCheckpoint(state, self.rng.getstate())
+
+    def start_final_challenge(self) -> None:
+        if self.world != 8:
+            return
+        self.save_challenge_checkpoint()
+        carried_population = self.population
+        growth_bonus = self.population_growth_between_worlds(8, 9)
+        self.world = 9
+        self.start_world(carried_population, growth_bonus)
+
+    def retry_final_challenge(self) -> bool:
+        if self.challenge_checkpoint is None:
+            return False
+        for name, value in self.challenge_checkpoint.run_state.items():
+            setattr(self, name, copy.deepcopy(value))
+        self.rng.setstate(self.challenge_checkpoint.rng_state)
+        self.challenge_world_growth_bonus = 0
+        self.challenge_shop_population_bonus = 0
+        self.challenge_shop_card_credits = {}
+        carried_population = self.population
+        growth_bonus = self.population_growth_between_worlds(8, 9)
+        self.world = 9
+        self.death_reason = ""
+        self.start_world(carried_population, growth_bonus)
+        return True
+
+    def continue_from_shop(self) -> None:
+        carried_population = self.population if self.world == 9 else None
+        population_bonus = 0
+        if self.world == 9:
+            population_bonus = (
+                self.challenge_world_growth_bonus
+                + self.challenge_shop_population_bonus
+            )
+        self.world += 1
+        self.start_world(carried_population, population_bonus)
+        self.challenge_world_growth_bonus = 0
+        self.challenge_shop_population_bonus = 0
+        self.challenge_shop_card_credits = {}
 
     def iter_effects(
         self,
@@ -1003,6 +1447,26 @@ class Game:
         self.mouse_sensitivity_editing = False
         self.sensitivity_input_text = ""
 
+    def crosshair_preset_name(self) -> str:
+        for preset in CROSSHAIR_PRESETS:
+            if preset["key"] == self.crosshair_preset:
+                return preset["name"]
+        return CROSSHAIR_PRESETS[0]["name"]
+
+    def crosshair_palette(self) -> tuple[tuple[int, int, int], ...]:
+        for preset in CROSSHAIR_PRESETS:
+            if preset["key"] == self.crosshair_preset:
+                return preset["palette"]
+        return CURSOR_PALETTE
+
+    def cycle_crosshair_preset(self, direction: int) -> None:
+        keys = [preset["key"] for preset in CROSSHAIR_PRESETS]
+        try:
+            index = keys.index(self.crosshair_preset)
+        except ValueError:
+            index = 0
+        self.crosshair_preset = keys[(index + direction) % len(keys)]
+
     @staticmethod
     def _digit_key_char(key: int) -> str | None:
         if pygame.K_0 <= key <= pygame.K_9:
@@ -1013,10 +1477,263 @@ class Game:
             return "."
         return None
 
+    def toggle_dev_panel(self) -> None:
+        self.dev_panel_open = not self.dev_panel_open
+        self.dev_editing_field = None
+        self.dev_input_text = ""
+        if self.dev_panel_open:
+            self._disable_relative_mouse()
+            pygame.mouse.set_visible(True)
+        else:
+            self.sync_mouse_mode()
+
+    def dev_field_specs(self) -> tuple[tuple[str, str, bool, float, float, float, str], ...]:
+        return (
+            ("gold", "金币", True, 0, 999_999_999, 100, "int"),
+            ("population", "人口 / 血量", True, 1, 999_999_999, 100, "int"),
+            ("default_population", "初始人口", True, 1, 999, 1, "int"),
+            ("default_damage", "基础伤害", False, 0.0, 9_999.0, 1.0, "float"),
+            ("default_fire_rate", "基础射速", False, 0.0, 9_999.0, 1.0, "float"),
+            ("world", "世界", True, 1, MAX_WORLD, 1, "int"),
+            (
+                "elapsed",
+                "关卡秒数",
+                False,
+                0.0,
+                world_duration(self.world),
+                5.0,
+                "float",
+            ),
+        )
+
+    def dev_value(self, key: str) -> float:
+        return float(
+            {
+                "gold": self.gold,
+                "population": self.population,
+                "default_population": self.default_population,
+                "default_damage": self.default_damage,
+                "default_fire_rate": self.default_fire_rate,
+                "world": self.world,
+                "elapsed": self.elapsed,
+            }[key]
+        )
+
+    def dev_set_value(self, key: str, value: float) -> None:
+        if key == "gold":
+            self.gold = int(round(value))
+        elif key == "population":
+            self.population = int(round(value))
+            self.population_peak = max(self.population_peak, self.population)
+        elif key == "default_population":
+            self.default_population = int(round(value))
+        elif key == "default_damage":
+            self.default_damage = round(value, 2)
+        elif key == "default_fire_rate":
+            self.default_fire_rate = round(value, 2)
+        elif key == "world":
+            self.world = int(round(value))
+        elif key == "elapsed":
+            self.elapsed = round(value, 2)
+
+    def dev_format_value(self, key: str, value: float, kind: str) -> str:
+        if kind == "int":
+            return f"{int(round(value)):,}"
+        return f"{value:.1f}"
+
+    def dev_raw_value_text(self, key: str) -> str:
+        return f"{self.dev_value(key):g}"
+
+    def dev_begin_edit(self, key: str) -> None:
+        self.dev_editing_field = key
+        self.dev_input_text = self.dev_raw_value_text(key)
+
+    def dev_commit_edit(self) -> None:
+        if self.dev_editing_field is None:
+            return
+        key = self.dev_editing_field
+        spec = next(spec for spec in self.dev_field_specs() if spec[0] == key)
+        _, _, is_int, minimum, maximum, _, _ = spec
+        try:
+            value = float(self.dev_input_text.strip())
+        except ValueError:
+            value = self.dev_value(key)
+        if is_int:
+            value = round(value)
+        value = max(minimum, min(maximum, value))
+        self.dev_set_value(key, value)
+        self.dev_editing_field = None
+        self.dev_input_text = ""
+
+    def dev_step_value(self, key: str, direction: int) -> None:
+        spec = next(spec for spec in self.dev_field_specs() if spec[0] == key)
+        _, _, is_int, minimum, maximum, step, _ = spec
+        value = self.dev_value(key) + direction * step
+        if is_int:
+            value = round(value)
+        value = max(minimum, min(maximum, value))
+        self.dev_set_value(key, value)
+
+    def dev_skip_to_shop(self) -> None:
+        if self.world == 8:
+            self.mode = Mode.CHALLENGE_CHOICE
+            self.sync_mouse_mode()
+        elif self.world >= MAX_WORLD:
+            self.mode = Mode.VICTORY
+            self.sync_mouse_mode()
+        else:
+            self.enter_shop()
+
+    def dev_clear_enemies(self) -> None:
+        self.enemies.clear()
+        self.bosses.clear()
+        self.gates.clear()
+        self.enemy_bullets.clear()
+
+    @staticmethod
+    def dev_panel_rect() -> pygame.Rect:
+        return pygame.Rect(160, 30, 960, 690)
+
+    @staticmethod
+    def dev_field_value_rect(index: int) -> pygame.Rect:
+        return pygame.Rect(460, 128 + index * 58, 260, 42)
+
+    @staticmethod
+    def dev_field_button_rect(index: int, direction: int) -> pygame.Rect:
+        return pygame.Rect(740 if direction < 0 else 800, 128 + index * 58, 46, 42)
+
+    @staticmethod
+    def dev_action_button_rect(row: int, column: int) -> pygame.Rect:
+        widths = (300, 210, 160, 150) if row == 0 else (200, 200, 180, 240)
+        x = 220
+        gap = 20
+        for index in range(column):
+            x += widths[index] + gap
+        return pygame.Rect(x, 522 + row * 66, widths[column], 52)
+
+    def handle_dev_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_F1):
+                self.toggle_dev_panel()
+                return
+            if self.dev_editing_field is not None:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self.dev_commit_edit()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.dev_input_text = self.dev_input_text[:-1]
+                else:
+                    char = self._digit_key_char(event.key)
+                    if char is not None:
+                        if char == "." and "." in self.dev_input_text:
+                            return
+                        self.dev_input_text += char
+                return
+            return
+
+        if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
+            return
+
+        specs = self.dev_field_specs()
+        value_rects = [self.dev_field_value_rect(index) for index in range(len(specs))]
+        if self.dev_editing_field is not None and not any(
+            rect.collidepoint(event.pos) for rect in value_rects
+        ):
+            self.dev_commit_edit()
+
+        for index, spec in enumerate(specs):
+            if self.dev_field_value_rect(index).collidepoint(event.pos):
+                self.dev_begin_edit(spec[0])
+                return
+            if self.dev_field_button_rect(index, -1).collidepoint(event.pos):
+                self.dev_step_value(spec[0], -1)
+                return
+            if self.dev_field_button_rect(index, 1).collidepoint(event.pos):
+                self.dev_step_value(spec[0], 1)
+                return
+
+        if self.dev_action_button_rect(0, 0).collidepoint(event.pos):
+            self.dev_skip_to_shop()
+        elif self.dev_action_button_rect(0, 1).collidepoint(event.pos):
+            self.dev_clear_enemies()
+        elif self.dev_action_button_rect(0, 2).collidepoint(event.pos):
+            self.gold += 10_000
+        elif self.dev_action_button_rect(0, 3).collidepoint(event.pos):
+            self.population += 10_000
+            self.population_peak = max(self.population_peak, self.population)
+        elif self.dev_action_button_rect(1, 0).collidepoint(event.pos):
+            self.default_damage += 100.0
+        elif self.dev_action_button_rect(1, 1).collidepoint(event.pos):
+            self.default_fire_rate += 10.0
+        elif self.dev_action_button_rect(1, 2).collidepoint(event.pos):
+            self.world = min(MAX_WORLD, self.world + 1)
+        elif self.dev_action_button_rect(1, 3).collidepoint(event.pos):
+            self.toggle_dev_panel()
+
+    def draw_dev_panel(self) -> None:
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((5, 7, 12, 215))
+        self.screen.blit(shade, (0, 0))
+
+        panel = self.dev_panel_rect()
+        pygame.draw.rect(self.screen, PANEL, panel, border_radius=16)
+        pygame.draw.rect(self.screen, CYAN, panel, 3, border_radius=16)
+
+        self.blit_text("开发者测试面板", (panel.x + 40, panel.y + 22), WHITE, self.font_large)
+        self.blit_text("点击数值可直接输入，± 按钮步进调整；F1 / Esc 关闭", (panel.x + 40, panel.y + 70), MUTED, self.font_small)
+
+        for index, spec in enumerate(self.dev_field_specs()):
+            key, label, _, _, _, _, kind = spec
+            y = 128 + index * 58
+            self.blit_text(label, (panel.x + 40, y + 8), WHITE, self.font_small)
+            value_rect = self.dev_field_value_rect(index)
+            pygame.draw.rect(self.screen, GRID, value_rect, border_radius=8)
+            if self.dev_editing_field == key:
+                pygame.draw.rect(self.screen, YELLOW, value_rect, 2, border_radius=8)
+                display = self.dev_input_text + ("_" if (pygame.time.get_ticks() // 500) % 2 == 0 else "")
+            else:
+                display = self.dev_format_value(key, self.dev_value(key), kind)
+            value_surface = self.font_small.render(display, True, WHITE)
+            self.screen.blit(value_surface, (value_rect.x + 12, value_rect.y + 9))
+            for direction in (-1, 1):
+                button_rect = self.dev_field_button_rect(index, direction)
+                pygame.draw.rect(self.screen, GRID, button_rect, border_radius=8)
+                pygame.draw.rect(self.screen, MUTED, button_rect, 2, border_radius=8)
+                text = "-" if direction < 0 else "+"
+                label_surface = self.font.render(text, True, CYAN)
+                self.screen.blit(label_surface, label_surface.get_rect(center=button_rect.center))
+
+        action_specs = (
+            ("结束本世界 → 下一阶段", GREEN, 0, 0),
+            ("清空场上敌人", BLUE, 0, 1),
+            ("金币 +10,000", YELLOW, 0, 2),
+            ("人口 +10,000", CYAN, 0, 3),
+            ("伤害 +100", ORANGE, 1, 0),
+            ("射速 +10", PURPLE, 1, 1),
+            ("世界 +1", WHITE, 1, 2),
+            ("关闭面板", RED, 1, 3),
+        )
+        for text, color, row, column in action_specs:
+            rect = self.dev_action_button_rect(row, column)
+            pygame.draw.rect(self.screen, GRID, rect, border_radius=10)
+            pygame.draw.rect(self.screen, color, rect, 2, border_radius=10)
+            label_surface = self.font_small.render(text, True, color)
+            self.screen.blit(label_surface, label_surface.get_rect(center=rect.center))
+
+        readout = (
+            f"当前伤害 {self.current_damage():.1f}  |  "
+            f"当前射速 {self.current_fire_rate():.1f}/s  |  "
+            f"理论DPS {format_number(self.current_dps())}"
+        )
+        self.blit_text(readout, (panel.x + 40, panel.bottom - 46), CYAN, self.font_small)
+
     def update_cursor_effects(self, dt: float, position: pygame.Vector2) -> None:
         self.cursor_time += dt
         self.cursor_phase += dt
-        self.cursor_trail.append((self.cursor_time, position.copy()))
+        if (
+            not self.cursor_trail
+            or position.distance_squared_to(self.cursor_trail[-1][1]) >= 4.0
+        ):
+            self.cursor_trail.append((self.cursor_time, position.copy()))
         while len(self.cursor_trail) > CURSOR_TRAIL_CAP:
             self.cursor_trail.pop(0)
         while self.cursor_trail and self.cursor_time - self.cursor_trail[0][0] > CURSOR_TRAIL_MAX_AGE:
@@ -1028,7 +1745,7 @@ class Game:
         self.last_cursor_pos = position.copy()
 
         self.cursor_spawn_timer -= dt
-        if self.cursor_spawn_timer <= 0:
+        if speed >= 18.0 and self.cursor_spawn_timer <= 0:
             count = 1 if speed < 120 else 2 if speed < 360 else 4
             for _ in range(count):
                 if len(self.cursor_particles) < CURSOR_PARTICLE_CAP:
@@ -1047,16 +1764,17 @@ class Game:
         velocity = pygame.Vector2(math.cos(angle), math.sin(angle)) * speed
         life = self.cursor_rng.uniform(0.16, 0.52)
         size = self.cursor_rng.uniform(1.4, 3.6)
-        color = self.cursor_rng.choice(CURSOR_PALETTE)
+        color = self.cursor_rng.choice(self.crosshair_palette())
         return CursorParticle(position.copy(), velocity, life, life, size, color)
 
     def _cursor_color(self, age_fraction: float) -> tuple[int, int, int]:
+        palette = self.crosshair_palette()
         phase = (self.cursor_phase * 0.9 + age_fraction * 0.35) % 1.0
-        segment = phase * (len(CURSOR_PALETTE) - 1)
+        segment = phase * (len(palette) - 1)
         index = int(segment)
         fraction = segment - index
-        first = CURSOR_PALETTE[index]
-        second = CURSOR_PALETTE[min(index + 1, len(CURSOR_PALETTE) - 1)]
+        first = palette[index]
+        second = palette[min(index + 1, len(palette) - 1)]
         return tuple(
             round(first[channel] * (1 - fraction) + second[channel] * fraction)
             for channel in range(3)
@@ -1064,47 +1782,184 @@ class Game:
 
     def draw_cursor_effects(self) -> None:
         position = self.current_mouse_position()
-        glow = pygame.Surface((WIDTH, HEIGHT))
+        glow_scale = 4
+        glow = self.cursor_glow_small_surface
         glow.fill((0, 0, 0))
         if len(self.cursor_trail) >= 2:
             for index in range(len(self.cursor_trail) - 1):
                 timestamp, point = self.cursor_trail[index]
                 age = min(1.0, max(0.0, self.cursor_time - timestamp) / CURSOR_TRAIL_MAX_AGE)
                 strength = (1.0 - age) ** 2
-                radius = 1.0 + (1.0 - age) * 4.5
                 color = self._cursor_color(age)
+                px = round(point.x / glow_scale)
+                py = round(point.y / glow_scale)
+                radius = max(1, round((1.0 + (1.0 - age) * 4.5) / glow_scale))
                 shade = tuple(round(channel * strength) for channel in color)
-                pygame.draw.circle(glow, shade, (round(point.x), round(point.y)), max(1, round(radius)))
+                outer_shade = tuple(round(channel * strength * 0.38) for channel in color)
+                pygame.draw.circle(glow, outer_shade, (px, py), max(2, round(radius * 2.0)))
+                pygame.draw.circle(glow, shade, (px, py), radius)
         for particle in self.cursor_particles:
             remaining = max(0.0, particle.life / particle.max_life)
-            radius = max(1, round(particle.size * (0.35 + 0.65 * remaining)))
+            radius = max(1, round((particle.size * (0.35 + 0.65 * remaining)) / glow_scale))
             shade = tuple(round(channel * remaining) for channel in particle.color)
-            pygame.draw.circle(
-                glow, shade, (round(particle.position.x), round(particle.position.y)), radius
+            head = (round(particle.position.x / glow_scale), round(particle.position.y / glow_scale))
+            tail = (
+                round((particle.position.x - particle.velocity.x * 0.06) / glow_scale),
+                round((particle.position.y - particle.velocity.y * 0.06) / glow_scale),
             )
-        self.screen.blit(glow, (0, 0), special_flags=pygame.BLEND_ADD)
+            pygame.draw.line(glow, shade, tail, head, max(1, radius))
+            pygame.draw.circle(glow, shade, head, radius)
+        pygame.transform.smoothscale(
+            glow,
+            self.cursor_glow_surface.get_size(),
+            self.cursor_glow_surface,
+        )
+        self.screen.blit(self.cursor_glow_surface, (0, 0), special_flags=pygame.BLEND_ADD)
         self._draw_crosshair(position)
 
     def _draw_crosshair(self, position: pygame.Vector2) -> None:
-        center = (round(position.x), round(position.y))
-        pygame.draw.circle(self.screen, WHITE, center, 8, 2)
-        pygame.draw.circle(self.screen, CYAN, center, 2)
-        for axis in (
-            pygame.Vector2(1, 0),
-            pygame.Vector2(-1, 0),
-            pygame.Vector2(0, 1),
-            pygame.Vector2(0, -1),
-        ):
-            start = position + axis * 11
-            end = position + axis * 18
-            pygame.draw.line(
-                self.screen, CYAN, (round(start.x), round(start.y)), (round(end.x), round(end.y)), 2
+        sprite = self._render_crosshair_sprite()
+        self.screen.blit(
+            sprite,
+            sprite.get_rect(center=(round(position.x), round(position.y))),
+        )
+
+    def _render_crosshair_sprite(self, draw_scale: float = 1.0) -> pygame.Surface:
+        size = CROSSHAIR_BOX * CROSSHAIR_SUPERSAMPLE
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        self._draw_crosshair_preset(
+            surface,
+            pygame.Vector2(size / 2, size / 2),
+            self.crosshair_preset,
+            self.cursor_phase,
+            scale=CROSSHAIR_SUPERSAMPLE * draw_scale,
+        )
+        return pygame.transform.smoothscale(surface, (CROSSHAIR_BOX, CROSSHAIR_BOX))
+
+    def _draw_crosshair_preset(
+        self,
+        surface: pygame.Surface,
+        position: pygame.Vector2,
+        preset_key: str,
+        phase: float,
+        scale: float = 1.0,
+    ) -> None:
+        x, y = round(position[0]), round(position[1])
+        if preset_key == "osu":
+            self._draw_osu_crosshair(surface, x, y, phase, scale)
+        elif preset_key == "neon":
+            self._draw_neon_crosshair(surface, x, y, phase, scale)
+        elif preset_key == "void":
+            self._draw_void_crosshair(surface, x, y, phase, scale)
+        elif preset_key == "hex":
+            self._draw_hex_crosshair(surface, x, y, phase, scale)
+        else:
+            self._draw_classic_crosshair(surface, x, y, phase, scale)
+
+    def _draw_classic_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        pygame.draw.circle(surface, WHITE, (x, y), max(1, round(8 * scale)), max(1, round(2 * scale)))
+        pygame.draw.circle(surface, CYAN, (x, y), max(1, round(2 * scale)))
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            start = (x + round(dx * 11 * scale), y + round(dy * 11 * scale))
+            end = (x + round(dx * 18 * scale), y + round(dy * 18 * scale))
+            pygame.draw.line(surface, CYAN, start, end, max(1, round(2 * scale)))
+        spin = phase * 2.4
+        rect = pygame.Rect(0, 0, max(1, round(34 * scale)), max(1, round(34 * scale)))
+        rect.center = (x, y)
+        pygame.draw.arc(surface, WHITE, rect, spin, spin + math.pi * 0.72, max(1, round(2 * scale)))
+        pygame.draw.arc(surface, WHITE, rect, spin + math.pi, spin + math.pi * 1.72, max(1, round(2 * scale)))
+
+    def _draw_osu_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        palette = self.crosshair_palette()
+        core = palette[0]
+        accent = palette[1]
+        spin = phase * 3.4
+        counter = phase * 2.2
+        pulse = 1.0 + 0.12 * math.sin(phase * 5.0)
+        pygame.draw.circle(surface, core, (x, y), max(1, round(4 * scale * pulse)))
+        pygame.draw.circle(surface, WHITE, (x, y), max(1, round(2 * scale)))
+        outer = pygame.Rect(0, 0, max(1, round(28 * scale)), max(1, round(28 * scale)))
+        outer.center = (x, y)
+        for offset in (0.0, math.pi * 2 / 3, math.pi * 4 / 3):
+            start_angle = spin + offset
+            pygame.draw.arc(
+                surface, accent, outer, start_angle, start_angle + math.pi * 0.8, max(1, round(2 * scale))
             )
-        spin = self.cursor_phase * 2.4
-        arc_rect = pygame.Rect(0, 0, 34, 34)
-        arc_rect.center = center
-        pygame.draw.arc(self.screen, WHITE, arc_rect, spin, spin + math.pi * 0.72, 2)
-        pygame.draw.arc(self.screen, WHITE, arc_rect, spin + math.pi, spin + math.pi * 1.72, 2)
+        inner = pygame.Rect(0, 0, max(1, round(18 * scale)), max(1, round(18 * scale)))
+        inner.center = (x, y)
+        pygame.draw.arc(surface, core, inner, counter, counter + math.pi * 1.4, max(1, round(2 * scale)))
+        for angle in (spin, spin + math.pi * 0.5, spin + math.pi, spin + math.pi * 1.5):
+            start = (x + round(math.cos(angle) * 10 * scale), y + round(math.sin(angle) * 10 * scale))
+            end = (x + round(math.cos(angle) * 14 * scale), y + round(math.sin(angle) * 14 * scale))
+            pygame.draw.line(surface, accent, start, end, max(1, round(scale)))
+
+    def _draw_neon_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        cyan = (64, 215, 255)
+        pink = (255, 96, 220)
+        breathe = 0.5 + 0.5 * math.sin(phase * 3.8)
+        reach = 14 + breathe * 15
+        half = max(1, round(6 * scale))
+        diamond = []
+        spin = phase * 2.0
+        for index in range(4):
+            angle = spin + index * math.pi / 2
+            diamond.append((x + round(math.cos(angle) * half), y + round(math.sin(angle) * half)))
+        pygame.draw.polygon(surface, WHITE, diamond)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            for start_off, end_off, width, color in (
+                (10, 14, 3, cyan),
+                (14, reach * 0.68, 2, pink),
+                (reach * 0.68, reach, 1, WHITE),
+            ):
+                start = (x + round(dx * start_off * scale), y + round(dy * start_off * scale))
+                end = (x + round(dx * end_off * scale), y + round(dy * end_off * scale))
+                pygame.draw.line(surface, color, start, end, max(1, round(width * scale)))
+            tip = (x + round(dx * reach * scale), y + round(dy * reach * scale))
+            pygame.draw.circle(surface, cyan, tip, max(1, round((2.5 + breathe) * scale)))
+
+    def _draw_void_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        pulse = 1.0 + 0.08 * math.sin(phase * 3.2)
+        layers = (
+            (phase * 1.6, 18 * scale * pulse, PURPLE),
+            (-phase * 1.15, 12 * scale, BLUE),
+            (phase * 0.7, 6 * scale, WHITE),
+        )
+        for rotation, radius, color in layers:
+            points = []
+            for index in range(3):
+                angle = rotation + index * math.tau / 3
+                points.append((x + round(math.cos(angle) * radius), y + round(math.sin(angle) * radius)))
+            pygame.draw.polygon(surface, color, points, max(1, round(2 * scale)))
+        pygame.draw.circle(surface, WHITE, (x, y), max(1, round(2 * scale)))
+
+    def _draw_hex_crosshair(
+        self, surface: pygame.Surface, x: int, y: int, phase: float, scale: float
+    ) -> None:
+        pulse = 1.0 + 0.10 * math.sin(phase * 4.2)
+        outer_points = []
+        for index in range(6):
+            angle = math.pi / 6 + index * math.tau / 6
+            radius = 16 * scale * pulse
+            outer_points.append((x + round(math.cos(angle) * radius), y + round(math.sin(angle) * radius)))
+        pygame.draw.polygon(surface, ORANGE, outer_points, max(1, round(2 * scale)))
+        inner_points = []
+        rotation = phase * 1.4
+        for index in range(6):
+            angle = rotation + math.pi / 6 + index * math.tau / 6
+            radius = 10 * scale
+            inner_points.append((x + round(math.cos(angle) * radius), y + round(math.sin(angle) * radius)))
+        pygame.draw.polygon(surface, YELLOW, inner_points, max(1, round(2 * scale)))
+        pygame.draw.circle(surface, YELLOW, (x, y), max(1, round(3 * scale)))
+        for point in outer_points:
+            pygame.draw.circle(surface, WHITE, point, max(1, round(scale)))
 
     def card_purchase_price(self, card: Card) -> int:
         return max(0, round(self.apply_stat(card.price, "card_price", TARGET_PLAYER)))
@@ -1249,19 +2104,26 @@ class Game:
             return candidates[0]
         return round(max(candidates, key=lambda x: min(abs(x - other) for other in active_x)))
 
-    def spawn_boss(self, kind: str) -> None:
+    def spawn_boss(self, kind: str, variant: str = "standard") -> None:
         data = {
             "small": (54.0, 4, 34),
             "medium": (46.0, 6, 42),
             "big": (90.0 + self.world * 5.0, 8, 54),
         }
         speed, reward, radius = data[kind]
+        if variant == "commander":
+            reward, radius = 30, 64
+        elif variant == "devourer":
+            reward, radius = 50, 72
         speed = max(0.0, self.apply_stat(speed, "move_speed", TARGET_BOSS, {"boss_kind": kind}))
         hp = max(1.0, self.apply_stat(world_target_health(self.world, kind), "health", TARGET_BOSS, {"boss_kind": kind}))
         windup = max(0.0, self.apply_stat(2.0, "boss_windup", TARGET_BOSS))
         self.bosses.append(
             Boss(
-                pygame.Vector2(self.rng.randint(radius + 10, WIDTH - radius - 10), -radius),
+                pygame.Vector2(
+                    self.rng.randint(radius + 10, WIDTH - radius - 10),
+                    radius + 10 if variant != "standard" else -radius,
+                ),
                 kind,
                 hp,
                 hp,
@@ -1271,10 +2133,20 @@ class Game:
                 175.0,
                 windup,
                 windup_move_factor=boss_windup_move_factor(self.world),
+                variant=variant,
+                roam_direction=(
+                    normalized(
+                        pygame.Vector2(
+                            self.rng.choice((-1.0, 1.0)),
+                            self.rng.uniform(0.25, 0.55),
+                        )
+                    )
+                    if variant != "standard"
+                    else pygame.Vector2(1.0, 0.35).normalize()
+                ),
             )
         )
-        names = {"small": "小Boss", "medium": "中Boss", "big": "大Boss"}
-        self.message = f"{names[kind]}出现！"
+        self.message = f"{self.boss_name(kind, variant)}出现！"
         self.message_timer = 2.5
 
     def handle_event(self, event: pygame.event.Event) -> None:
@@ -1308,7 +2180,42 @@ class Game:
                 else:
                     return
 
+        if self.dev_panel_open:
+            self.handle_dev_event(event)
+            return
+
+        if self.settlement is not None:
+            if self.settlement.phase == "button":
+                if event.type == pygame.KEYDOWN and event.key in (
+                    pygame.K_RETURN,
+                    pygame.K_KP_ENTER,
+                    pygame.K_SPACE,
+                ):
+                    self.finish_settlement()
+                    return
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.settlement_button_rect().collidepoint(event.pos):
+                        self.finish_settlement()
+                        return
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.mode == Mode.CHALLENGE_CHOICE:
+                if self.challenge_choice_rect("restart").collidepoint(event.pos):
+                    self.reset_run()
+                elif self.challenge_choice_rect("continue").collidepoint(event.pos):
+                    self.start_final_challenge()
+                return
+            if (
+                self.mode == Mode.GAME_OVER
+                and self.challenge_checkpoint is not None
+                and self.world >= 9
+            ):
+                if self.challenge_failure_rect("retry").collidepoint(event.pos):
+                    self.retry_final_challenge()
+                elif self.challenge_failure_rect("new").collidepoint(event.pos):
+                    self.reset_run()
+                return
             if self.mode == Mode.MAIN_MENU:
                 for index, destination in enumerate((Mode.PLAYING, Mode.TUTORIAL, Mode.SETTINGS)):
                     if self.main_menu_button_rect(index).collidepoint(event.pos):
@@ -1335,11 +2242,22 @@ class Game:
                 if self.settings_mouse_sensitivity_value_rect().collidepoint(event.pos):
                     self.begin_mouse_sensitivity_edit()
                     return
+                if self.settings_crosshair_button_rect(-1).collidepoint(event.pos):
+                    self.cycle_crosshair_preset(-1)
+                    return
+                if self.settings_crosshair_button_rect(1).collidepoint(event.pos):
+                    self.cycle_crosshair_preset(1)
+                    return
                 for index, (kind, _) in enumerate(self.settings_volume_rows()):
                     for direction in (-1, 1):
                         if self.settings_volume_button_rect(index, direction).collidepoint(event.pos):
                             self.adjust_volume(kind, direction)
                             self.preview_volume(kind)
+                            return
+                for index, (kind, _) in enumerate(self.settings_visual_rows()):
+                    for direction in (-1, 1):
+                        if self.settings_visual_button_rect(index, direction).collidepoint(event.pos):
+                            self.adjust_visual_effect(kind, direction)
                             return
                 return
         if event.type == pygame.MOUSEBUTTONDOWN and self.mode == Mode.PAUSED:
@@ -1373,6 +2291,9 @@ class Game:
                 self.begin_mouse_sensitivity_edit()
                 self.sensitivity_input_text = "0." if char == "." else char
                 return
+        if event.key == pygame.K_F1:
+            self.toggle_dev_panel()
+            return
         if event.key == pygame.K_ESCAPE:
             if self.mode in (Mode.TUTORIAL, Mode.SETTINGS):
                 self.mode = Mode.MAIN_MENU
@@ -1386,16 +2307,35 @@ class Game:
             self.reset_run()
         elif self.mode == Mode.PAUSED and event.key == pygame.K_r:
             self.reset_run()
-        elif self.mode in (Mode.GAME_OVER, Mode.VICTORY) and event.key == pygame.K_r:
+        elif self.mode == Mode.CHALLENGE_CHOICE:
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                self.start_final_challenge()
+            elif event.key == pygame.K_r:
+                self.reset_run()
+        elif self.mode == Mode.GAME_OVER and event.key == pygame.K_r:
+            if not (self.world >= 9 and self.retry_final_challenge()):
+                self.reset_run()
+        elif self.mode == Mode.GAME_OVER and event.key == pygame.K_n:
+            self.reset_run()
+        elif self.mode == Mode.VICTORY and event.key == pygame.K_r:
             self.reset_run()
         elif self.mode == Mode.SHOP and event.key == pygame.K_RETURN:
-            self.world += 1
-            self.start_world()
+            self.continue_from_shop()
 
     def update(self, dt: float) -> None:
-        self.update_audio(dt)
-        if self.mode != Mode.PLAYING:
+        if self.dev_panel_open:
             return
+        self.update_audio(dt)
+        self.update_visual_effects(dt)
+        if self.mode != Mode.PLAYING:
+            self.cursor_phase += dt
+            return
+        if self.settlement is not None:
+            self.update_settlement(dt)
+            return
+        self._update_world(dt)
+
+    def _update_world(self, dt: float) -> None:
         self.elapsed += dt
         self.population_peak = max(self.population_peak, self.population)
         self.message_timer = max(0.0, self.message_timer - dt)
@@ -1426,8 +2366,11 @@ class Game:
             return
         if self.population <= 0:
             self.end_game("人口降为0，防线崩溃")
-        elif self.elapsed >= WORLD_DURATION:
-            self.end_game("120秒截止，大Boss发动强制秒杀")
+        elif self.elapsed >= world_duration(self.world):
+            self.end_game(
+                f"{round(world_duration(self.world))}秒截止，"
+                "大Boss发动强制秒杀"
+            )
 
     def update_player(self, dt: float) -> None:
         keys = pygame.key.get_pressed()
@@ -1555,19 +2498,34 @@ class Game:
         if self.elite_timer <= 0:
             self.spawn_enemy(True)
             base_elite_interval = max(8.0, 18.0 - (self.world - 1) * 1.45)
-            self.elite_timer = max(3.0, self.apply_stat(base_elite_interval, "elite_spawn_interval", TARGET_PLAYER))
+            elite_interval = self.apply_stat(
+                base_elite_interval,
+                "elite_spawn_interval",
+                TARGET_PLAYER,
+            )
+            commander = next(
+                (boss for boss in self.bosses if boss.variant == "commander"),
+                None,
+            )
+            if commander is not None and commander.phase >= 2:
+                elite_interval *= 0.5
+            self.elite_timer = max(3.0, elite_interval)
         if self.gate_timer <= 0 and not any(g.kind == "number" for g in self.gates):
             self.spawn_number_gate()
             self.gate_timer = self.rng.uniform(8.0, 11.0)
         if self.special_spawned < 3 and self.elapsed >= self.special_times[self.special_spawned]:
             self.spawn_special_gate()
-        if not self.small_spawned and self.elapsed >= self.small_boss_time:
+        if (
+            self.world < 9
+            and not self.small_spawned
+            and self.elapsed >= self.small_boss_time
+        ):
             self.small_spawned = True
             self.spawn_boss("small")
-        if not self.medium_spawned and self.elapsed >= 60:
+        if self.world < 9 and not self.medium_spawned and self.elapsed >= 60:
             self.medium_spawned = True
             self.spawn_boss("medium")
-        if not self.big_spawned and self.elapsed >= 90:
+        if not self.big_spawned and self.elapsed >= world_boss_spawn_time(self.world):
             self.big_spawned = True
             self.spawn_boss("big")
 
@@ -1625,7 +2583,12 @@ class Game:
                         TARGET_BOSS,
                         {"boss_kind": boss.kind},
                     )
+                    if boss.variant == "commander" and any(
+                        enemy.elite for enemy in self.enemies
+                    ):
+                        damage *= 0.40
                     boss.hp -= damage
+                    self.total_damage_dealt += damage
                     self.play_effect_sound(self.enemy_hit_sound, "enemy_hit")
                     self.apply_on_hit_effects(TARGET_BOSS, boss.position, damage, boss)
                     self.dispatch_effect_event("on_hit", TARGET_BOSS)
@@ -1639,6 +2602,7 @@ class Game:
                         target = TARGET_ELITE if enemy.elite else TARGET_NORMAL
                         damage = bullet.damage * self.apply_stat(1.0, "damage_taken", target)
                         enemy.hp -= damage
+                        self.total_damage_dealt += damage
                         self.play_effect_sound(self.enemy_hit_sound, "enemy_hit")
                         for owned, index, effect in self.iter_effects(
                             action="execute",
@@ -1666,6 +2630,7 @@ class Game:
                         exclude_triggers={"while_not_firing"},
                     )
                     gate_damage = bullet.gate_damage * (passive_gate_multiplier + bullet.gate_target_bonus)
+                    self.total_damage_dealt += gate_damage
                     self.play_effect_sound(self.gate_hit_sound, "gate_hit")
                     if gate.kind == "number":
                         gate.value += gate_steps(gate_damage)
@@ -1709,16 +2674,25 @@ class Game:
                     continue
                 if global_effect or enemy.position.distance_to(center) <= radius:
                     enemy.hp -= splash_damage
+                    self.total_damage_dealt += splash_damage
 
     def splash(self, center: pygame.Vector2, damage: float, source: object, radius: float = 95.0) -> None:
         for enemy in self.enemies:
             if enemy is not source and enemy.position.distance_to(center) <= radius:
                 enemy.hp -= damage
+                self.total_damage_dealt += damage
 
-    def register_kill(self, elite: bool = False) -> None:
+    def register_kill(
+        self,
+        elite: bool = False,
+        position: pygame.Vector2 | None = None,
+        radius: int = 16,
+    ) -> None:
         self.total_kills += 1
         self.rapid_reload_kills += 1
         self.play_kill_sound()
+        if position is not None:
+            self.spawn_death_effects(position, radius, 1.75 if elite else 1.0)
         target = TARGET_ELITE if elite else TARGET_NORMAL
         self.dispatch_effect_event("on_enemy_kill", target)
         if elite:
@@ -1756,7 +2730,7 @@ class Game:
         for enemy in self.enemies[:]:
             if enemy.hp <= 0:
                 self.enemies.remove(enemy)
-                self.register_kill(enemy.elite)
+                self.register_kill(enemy.elite, enemy.position, enemy.radius)
                 if enemy.elite:
                     self.population += round(self.apply_stat(4.0, "elite_kill_population", TARGET_PLAYER))
                 continue
@@ -1823,6 +2797,27 @@ class Game:
                 self.message_timer = 2.5
                 self.gates.remove(gate)
             elif gate.rect.top > HEIGHT:
+                devourer = next(
+                    (
+                        boss
+                        for boss in self.bosses
+                        if boss.variant == "devourer" and boss.hp > 0
+                    ),
+                    None,
+                )
+                if devourer is not None:
+                    before = devourer.hp
+                    devourer.hp = min(
+                        devourer.max_hp,
+                        devourer.hp + devourer.max_hp * 0.03,
+                    )
+                    devourer.rage_stacks = min(5, devourer.rage_stacks + 1)
+                    healed = max(0, round(devourer.hp - before))
+                    self.message = (
+                        f"吞门者吞噬门：回复 {format_number(healed)}，"
+                        f"狂暴 {devourer.rage_stacks}/5"
+                    )
+                    self.message_timer = 2.5
                 self.gates.remove(gate)
 
     def apply_special_buff(self, buff: str, recruit_multiplier: float = 1.1, reward: int = 1) -> None:
@@ -1847,6 +2842,16 @@ class Game:
                 if self.mode != Mode.PLAYING:
                     return
                 continue
+            if boss.phase == 1 and boss.hp <= boss.max_hp * 0.50:
+                boss.phase = 2
+                if boss.variant == "commander":
+                    self.spawn_enemy(True)
+                    self.elite_timer = min(self.elite_timer, 3.0)
+                    self.message = "终局统帅进入第二阶段：精英增援加速"
+                elif boss.variant == "devourer":
+                    self.message = "吞门者进入第二阶段：环形弹幕启动"
+                if boss.variant != "standard":
+                    self.message_timer = 3.0
             was_winding_up = boss.windup_remaining is not None
             if boss.update(dt, self.player):
                 self.execute_player(1.0)
@@ -1857,7 +2862,7 @@ class Game:
                 self.message_timer = 2.0
             if boss.kind != "big" and boss.position.y - boss.radius > HEIGHT:
                 self.bosses.remove(boss)
-                self.message = f"{self.boss_name(boss.kind)}逃走了"
+                self.message = f"{self.boss_name(boss.kind, boss.variant)}逃走了"
                 self.message_timer = 1.8
 
     def execute_player(self, threshold: float) -> bool:
@@ -1883,6 +2888,26 @@ class Game:
             "medium": (5, 12, 190.0, 0.03),
             "big": (7, 10, 205.0, 0.05),
         }[boss.kind]
+        if (
+            boss.variant == "devourer"
+            and boss.phase >= 2
+            and boss.pattern_index % 2 == 1
+        ):
+            for index in range(16):
+                angle = index * (360.0 / 16) + boss.pattern_index * 11.25
+                self.enemy_bullets.append(
+                    EnemyBullet(
+                        boss.position.copy(),
+                        pygame.Vector2(0, -speed).rotate(angle),
+                        population_loss_ratio=0.03,
+                        source="吞门者环形弹幕",
+                    )
+                )
+            boss.pattern_index += 1
+            interval = self.boss_shot_interval(boss.kind)
+            interval *= 0.92 ** boss.rage_stacks
+            boss.shoot_timer = interval * self.rng.uniform(0.90, 1.10)
+            return
         direction = normalized(self.player - boss.position)
         center = (bullet_count - 1) / 2
         for index in range(bullet_count):
@@ -1892,41 +2917,53 @@ class Game:
                     boss.position.copy(),
                     direction.rotate(angle) * speed,
                     population_loss_ratio=loss_ratio,
-                    source=f"{self.boss_name(boss.kind)}弹幕",
+                    source=f"{self.boss_name(boss.kind, boss.variant)}弹幕",
                 )
             )
         interval = self.boss_shot_interval(boss.kind)
+        if boss.variant == "devourer":
+            boss.pattern_index += 1
+            interval *= 0.92 ** boss.rage_stacks
         boss.shoot_timer = interval * self.rng.uniform(0.90, 1.10)
 
     def kill_boss(self, boss: Boss) -> None:
         if boss.kind == "big":
             self.log_world_completion()
-        self.play_kill_sound()
+        self.play_boss_kill_sound()
+        impact = {"small": 2.3, "medium": 3.0, "big": 4.0}[boss.kind]
+        self.spawn_death_effects(boss.position, boss.radius, impact)
         gold_before = self.gold
         base_reward = boss_gold_reward(boss.reward, self.gold)
         self.gold += round(self.apply_stat(base_reward, "boss_gold_reward", TARGET_PLAYER))
         self.dispatch_effect_event("on_boss_kill", TARGET_BOSS)
         reward = self.gold - gold_before
+        self.world_boss_gold += reward
         self.bosses.remove(boss)
-        self.message = f"击杀{self.boss_name(boss.kind)}：金币 +{reward}"
+        self.message = f"击杀{self.boss_name(boss.kind, boss.variant)}：金币 +{reward}"
         self.message_timer = 3.0
         if boss.kind == "big":
-            interest = self.dispatch_effect_event("on_world_complete")["gold"]
-            if interest:
-                self.message += f"，利息 +{interest}"
-            if self.world >= 8:
-                self.mode = Mode.VICTORY
-                self.sync_mouse_mode()
-            else:
-                self.enter_shop()
+            self.world_interest = self.dispatch_effect_event("on_world_complete")["gold"]
+            if self.world_interest:
+                self.message += f"，利息 +{self.world_interest}"
+            self.begin_settlement()
 
     @staticmethod
-    def boss_name(kind: str) -> str:
+    def boss_name(kind: str, variant: str = "standard") -> str:
+        if variant == "commander":
+            return "终局统帅"
+        if variant == "devourer":
+            return "吞门者"
         return {"small": "小Boss", "medium": "中Boss", "big": "大Boss"}[kind]
 
     def enter_shop(self) -> None:
         self.mode = Mode.SHOP
         self.shop_round += 1
+        if self.world == 9:
+            self.challenge_world_growth_bonus = self.population_growth_between_worlds(
+                9, 10
+            )
+            self.challenge_shop_population_bonus = 0
+            self.challenge_shop_card_credits = {}
         self.refresh_cost = 0
         self.detail_card = None
         self.card_page = "normal"
@@ -1991,9 +3028,24 @@ class Game:
             self.shop_message(f"过载交换进度 {total}/{OVERLOAD_EXCHANGE_COST}")
             return True
         card = self.draw_overload_card(offer.overload_category)
-        self.overload_cards.append(
-            OwnedCard(card.key, "overload", self.world, acquired_shop_round=self.shop_round)
+        before_population = (
+            self.starting_population_value(10) if self.world == 9 else 0
         )
+        gained = OwnedCard(
+            card.key,
+            "overload",
+            self.world,
+            acquired_shop_round=self.shop_round,
+        )
+        self.overload_cards.append(gained)
+        if self.world == 9:
+            credit = max(
+                0,
+                self.starting_population_value(10) - before_population,
+            )
+            if credit:
+                self.challenge_shop_card_credits[gained.instance_id] = credit
+                self.challenge_shop_population_bonus += credit
         self.dispatch_effect_event("on_card_purchase", TARGET_PLAYER)
         index = next(index for index, candidate in enumerate(self.shop_offers) if candidate is offer)
         self.shop_offers.pop(index)
@@ -2002,7 +3054,24 @@ class Game:
         return True
 
     def remove_owned_card(self, owned: OwnedCard, collection: list[OwnedCard]) -> None:
+        is_new_challenge_card = owned.instance_id in self.challenge_shop_card_credits
+        growth_before = (
+            self.population_growth_between_worlds(9, 10)
+            if self.world == 9 and not is_new_challenge_card
+            else 0
+        )
+        credit = self.challenge_shop_card_credits.pop(owned.instance_id, 0)
+        self.challenge_shop_population_bonus = max(
+            0,
+            self.challenge_shop_population_bonus - credit,
+        )
         collection.remove(owned)
+        if self.world == 9 and not is_new_challenge_card:
+            growth_after = self.population_growth_between_worlds(9, 10)
+            self.challenge_world_growth_bonus = max(
+                0,
+                self.challenge_world_growth_bonus + growth_after - growth_before,
+            )
         for runtime_key in [key for key in self.effect_runtime if key[0] == owned.instance_id]:
             del self.effect_runtime[runtime_key]
 
@@ -2085,15 +3154,30 @@ class Game:
                 else:
                     self.gold -= price
                     wholesale_purchase = self.has_stat_effect("wholesale_common_sale")
-                    self.equipped_cards.append(
-                        OwnedCard(
-                            card.key,
-                            offer.enhancement,
-                            self.world,
-                            wholesale_purchase,
-                            self.wholesale_sale_price(card.rarity) if wholesale_purchase else None,
-                        )
+                    before_population = (
+                        self.starting_population_value(10)
+                        if self.world == 9
+                        else 0
                     )
+                    owned = OwnedCard(
+                        card.key,
+                        offer.enhancement,
+                        self.world,
+                        wholesale_purchase,
+                        self.wholesale_sale_price(card.rarity)
+                        if wholesale_purchase
+                        else None,
+                        acquired_shop_round=self.shop_round,
+                    )
+                    self.equipped_cards.append(owned)
+                    if self.world == 9:
+                        credit = max(
+                            0,
+                            self.starting_population_value(10) - before_population,
+                        )
+                        if credit:
+                            self.challenge_shop_card_credits[owned.instance_id] = credit
+                            self.challenge_shop_population_bonus += credit
                     self.dispatch_effect_event("on_card_purchase", TARGET_PLAYER)
                     self.shop_offers.remove(offer)
                     self.fill_shop()
@@ -2108,6 +3192,8 @@ class Game:
                     self.attribute_purchases[key] += 1
                     if key == "population":
                         self.default_population += 2
+                        if self.world == 9:
+                            self.challenge_shop_population_bonus += 2
                     elif key == "damage":
                         self.default_damage += 1.0
                     else:
@@ -2124,8 +3210,7 @@ class Game:
                 self.roll_shop()
             return
         if pygame.Rect(1080, 495, 145, 52).collidepoint(position):
-            self.world += 1
-            self.start_world()
+            self.continue_from_shop()
 
     def handle_shop_detail(self, position: tuple[int, int]) -> None:
         for index, owned in enumerate(self.visible_card_collection()):
@@ -2139,6 +3224,8 @@ class Game:
         self.message_timer = 3.0
 
     def end_game(self, reason: str) -> None:
+        if self.settlement is not None:
+            return
         self.mode = Mode.GAME_OVER
         self.death_reason = reason
         self.sync_mouse_mode()
@@ -2146,6 +3233,588 @@ class Game:
     def abandon_run_to_main_menu(self) -> None:
         self.mode = Mode.MAIN_MENU
         self.sync_mouse_mode()
+
+    def spawn_death_effects(
+        self,
+        position: pygame.Vector2,
+        radius: int,
+        impact: float,
+    ) -> None:
+        self.kill_combo = self.kill_combo + 1 if self.kill_combo_timer > 0 else 1
+        self.kill_combo_timer = 0.28
+        combo_scale = min(2.35, 1.0 + (self.kill_combo - 1) * 0.22)
+        strength = min(SHAKE_STRENGTH_CAP, 2.3 * impact * combo_scale)
+        self.shake_strength = min(
+            SHAKE_STRENGTH_CAP,
+            max(strength, self.shake_strength + strength * 0.32),
+        )
+        duration = min(0.30, 0.10 + impact * 0.035 + min(0.08, self.kill_combo * 0.012))
+        self.shake_timer = max(self.shake_timer, duration)
+        self.shake_duration = max(self.shake_duration, self.shake_timer)
+
+        point_count = 12 + min(8, radius // 8)
+        stain_scale = radius * self.visual_rng.uniform(1.15, 1.55)
+        points = []
+        for index in range(point_count):
+            angle = math.tau * index / point_count
+            distance = stain_scale * self.visual_rng.uniform(0.58, 1.12)
+            points.append(pygame.Vector2(math.cos(angle), math.sin(angle)) * distance)
+        droplets = tuple(
+            (
+                pygame.Vector2(1, 0).rotate(self.visual_rng.uniform(0, 360))
+                * self.visual_rng.uniform(stain_scale * 0.75, stain_scale * 1.75),
+                self.visual_rng.uniform(max(1.5, radius * 0.08), max(2.5, radius * 0.22)),
+            )
+            for _ in range(3 + min(6, radius // 9))
+        )
+        stain_life = self.visual_rng.uniform(5.0, 7.0)
+        self.blood_stains.append(
+            BloodStain(position.copy(), tuple(points), droplets, stain_life, stain_life)
+        )
+        if len(self.blood_stains) > BLOOD_STAIN_CAP:
+            del self.blood_stains[:-BLOOD_STAIN_CAP]
+
+        particle_count = min(38, 8 + round(radius * 0.30 + impact * 3))
+        for _ in range(particle_count):
+            angle = self.visual_rng.uniform(0, math.tau)
+            speed = self.visual_rng.uniform(85.0, 185.0) * min(1.45, 0.85 + impact * 0.15)
+            life = self.visual_rng.uniform(0.18, 0.42)
+            self.death_particles.append(
+                DeathParticle(
+                    position.copy(),
+                    pygame.Vector2(math.cos(angle), math.sin(angle)) * speed,
+                    life,
+                    life,
+                    self.visual_rng.uniform(1.2, 3.2),
+                )
+            )
+        if len(self.death_particles) > DEATH_PARTICLE_CAP:
+            del self.death_particles[:-DEATH_PARTICLE_CAP]
+
+    def update_visual_effects(self, dt: float) -> None:
+        self.kill_combo_timer = max(0.0, self.kill_combo_timer - dt)
+        if self.kill_combo_timer <= 0:
+            self.kill_combo = 0
+        self.shake_timer = max(0.0, self.shake_timer - dt)
+        if self.shake_timer <= 0:
+            self.shake_strength = 0.0
+            self.shake_duration = 0.0
+
+        for stain in self.blood_stains:
+            stain.life -= dt
+        self.blood_stains = [stain for stain in self.blood_stains if stain.life > 0]
+
+        drag = max(0.0, 1.0 - dt * 5.5)
+        for particle in self.death_particles:
+            particle.position += particle.velocity * dt
+            particle.velocity *= drag
+            particle.life -= dt
+        self.death_particles = [particle for particle in self.death_particles if particle.life > 0]
+
+    def begin_settlement(self) -> None:
+        dps = self.current_dps()
+        score = self.settlement_score(
+            self.elapsed,
+            dps,
+            self.population,
+            self.population_peak,
+            self.world,
+        )
+        rank = self.rank_for_score(score)[0]
+        gold_total = self.world_boss_gold + self.world_interest
+        rows = [
+            SettlementRow(
+                "gold",
+                "Boss 赏金",
+                f"+{gold_total}",
+                f"击杀赏金 {self.world_boss_gold} + 利息 {self.world_interest}"
+                if self.world_interest
+                else f"击杀赏金 {self.world_boss_gold}",
+                float(gold_total),
+                YELLOW,
+            ),
+            SettlementRow(
+                "population",
+                "结束时的人口",
+                f"{self.population}",
+                "守住的人口规模",
+                float(self.population),
+                CYAN,
+            ),
+            SettlementRow(
+                "dps",
+                "DPS",
+                format_number(round(dps)),
+                "结算时的理论秒伤",
+                float(dps),
+                PURPLE,
+            ),
+            SettlementRow(
+                "damage",
+                "总共造成的伤害",
+                format_number(round(self.total_damage_dealt)),
+                "本世界累计输出",
+                float(self.total_damage_dealt),
+                WHITE,
+            ),
+        ]
+        self.settlement = SettlementState(
+            "slowmo",
+            0.0,
+            0,
+            rows,
+            score,
+            rank,
+            -HEIGHT,
+            999.0,
+        )
+
+    @staticmethod
+    def settlement_score(
+        clear_time: float,
+        dps: float,
+        end_population: int,
+        peak_population: int,
+        world: int,
+    ) -> int:
+        boss_spawn_time = world_boss_spawn_time(world)
+        kill_window = max(1.0, world_duration(world) - boss_spawn_time)
+        time_bonus = 40.0 * max(
+            0.0,
+            min(
+                1.0,
+                1.0 - max(0.0, clear_time - boss_spawn_time) / kill_window,
+            ),
+        )
+        retention = max(0.0, min(1.0, end_population / max(1, peak_population)))
+        population_score = 30.0 * retention
+        firepower_score = 30.0 * min(1.0, dps / max(1, world_dps_threshold(world)) / 2.0)
+        return round(time_bonus + population_score + firepower_score)
+
+    @staticmethod
+    def rank_for_score(score: int) -> tuple[str, tuple[int, int, int]]:
+        for rank, threshold, color in SETTLEMENT_RANK_THRESHOLDS:
+            if score >= threshold:
+                return rank, color
+        return "C", MUTED
+
+    def settlement_rank_color(self) -> tuple[int, int, int]:
+        return self.rank_for_score(self.settlement.score)[1] if self.settlement else MUTED
+
+    def settlement_rank_sprite(self) -> pygame.Surface:
+        assert self.settlement is not None
+        color = self.settlement_rank_color()
+        key = (self.settlement.rank, color)
+        cached = self.settlement_rank_cache.get(key)
+        if cached is not None:
+            return cached
+
+        text = self.font_huge.render(self.settlement.rank, True, color)
+        padding = 38
+        size = (text.get_width() + padding * 2, text.get_height() + padding * 2)
+        source = pygame.Surface(size, pygame.SRCALPHA)
+        source.blit(text, text.get_rect(center=(size[0] // 2, size[1] // 2)))
+        wide_glow = pygame.transform.gaussian_blur(source, 13)
+        tight_glow = pygame.transform.gaussian_blur(source, 5)
+        wide_glow.set_alpha(155)
+        tight_glow.set_alpha(215)
+        sprite = pygame.Surface(size, pygame.SRCALPHA)
+        sprite.blit(wide_glow, (0, 0))
+        sprite.blit(tight_glow, (0, 0))
+        sprite.blit(text, text.get_rect(center=(size[0] // 2, size[1] // 2)))
+        self.settlement_rank_cache[key] = sprite
+        return sprite
+
+    def settlement_shown_rows(self) -> int:
+        if self.settlement is None or self.settlement.phase in ("slowmo", "panel"):
+            return 0
+        if self.settlement.phase == "rows":
+            return self.settlement.row_index
+        return len(self.settlement.rows)
+
+    @staticmethod
+    def settlement_panel_rect() -> pygame.Rect:
+        return pygame.Rect(140, SETTLEMENT_PANEL_Y, WIDTH - 280, HEIGHT - 180)
+
+    @staticmethod
+    def settlement_row_position(index: int) -> tuple[int, int]:
+        return (188, SETTLEMENT_PANEL_Y + 100 + index * 64)
+
+    @staticmethod
+    def settlement_score_center() -> tuple[int, int]:
+        return (WIDTH // 2, SETTLEMENT_PANEL_Y + 360)
+
+    def settlement_row_impact_position(
+        self,
+        index: int,
+        row: SettlementRow,
+    ) -> pygame.Vector2:
+        _, y = self.settlement_row_position(index)
+        width, height = self.font_large.size(row.value_text)
+        right = self.settlement_panel_rect().right - 56
+        return pygame.Vector2(right - width * 1.25 / 2, y + height * 1.25 + 4)
+
+    def settlement_rank_impact_position(self) -> pygame.Vector2:
+        center = pygame.Vector2(self.settlement_score_center())
+        rank = self.settlement.rank if self.settlement else "S"
+        height = self.font_huge.size(rank)[1] * SETTLEMENT_RANK_IMPACT_SCALE
+        return pygame.Vector2(center.x, center.y + height / 2 + 6)
+
+    @staticmethod
+    def settlement_button_rect() -> pygame.Rect:
+        return pygame.Rect(WIDTH // 2 - 190, SETTLEMENT_PANEL_Y + 480, 380, 52)
+
+    def update_settlement(self, dt: float) -> None:
+        settlement = self.settlement
+        assert settlement is not None
+        settlement.timer += dt
+        settlement.pop_timer += dt
+        self.cursor_phase += dt
+        for particle in self.settlement_particles:
+            particle.velocity.y += 460.0 * dt
+            particle.position += particle.velocity * dt
+            particle.velocity *= max(0.0, 1.0 - dt * 3.2)
+            particle.life -= dt
+        self.settlement_particles = [p for p in self.settlement_particles if p.life > 0]
+
+        if settlement.phase == "slowmo":
+            self._update_world(dt * SETTLEMENT_SLOWMO_SCALE)
+            if settlement.timer >= SETTLEMENT_SLOWMO_DURATION:
+                settlement.phase = "panel"
+                settlement.timer = 0.0
+                settlement.panel_y = -HEIGHT
+                self._disable_relative_mouse()
+                pygame.mouse.set_visible(True)
+            return
+        if settlement.phase == "panel":
+            progress = min(1.0, settlement.timer / SETTLEMENT_PANEL_DURATION)
+            eased = 1.0 - (1.0 - progress) ** 3
+            settlement.panel_y = round(-HEIGHT + (SETTLEMENT_PANEL_Y + HEIGHT) * eased)
+            if progress >= 1.0:
+                settlement.phase = "rows"
+                settlement.timer = -SETTLEMENT_FIRST_ROW_DELAY
+                settlement.pop_timer = 0.0
+                self.slam_settlement_impact(
+                    pygame.Vector2(WIDTH // 2, SETTLEMENT_PANEL_Y + 30),
+                    6.0,
+                )
+            return
+        if settlement.phase == "rows":
+            if settlement.timer >= 0.0:
+                settlement.row_index += 1
+                settlement.timer = -SETTLEMENT_ROW_INTERVAL
+                settlement.pop_timer = 0.0
+                row = settlement.rows[settlement.row_index - 1]
+                impact = self.settlement_row_impact_position(settlement.row_index - 1, row)
+                self.slam_settlement_impact(impact, row.magnitude)
+                if settlement.row_index >= len(settlement.rows):
+                    settlement.phase = "score"
+                    settlement.timer = 0.0
+            return
+        if settlement.phase == "score":
+            if settlement.timer >= SETTLEMENT_SCORE_DELAY:
+                settlement.phase = "rank_drop"
+                settlement.timer = 0.0
+                settlement.pop_timer = 0.0
+            return
+        if settlement.phase == "rank_drop":
+            if settlement.timer >= SETTLEMENT_RANK_DROP_DURATION:
+                settlement.phase = "rank"
+                settlement.timer = 0.0
+                settlement.pop_timer = 0.0
+                self.slam_settlement_impact(
+                    self.settlement_rank_impact_position(),
+                    SHAKE_STRENGTH_CAP,
+                    big=True,
+                )
+                self.play_settlement_rank_sound()
+            return
+        if settlement.phase == "rank":
+            if settlement.timer >= SETTLEMENT_BUTTON_DELAY:
+                settlement.phase = "button"
+                settlement.timer = 0.0
+            return
+
+    def slam_settlement_impact(
+        self,
+        position: pygame.Vector2,
+        magnitude: float,
+        big: bool = False,
+    ) -> None:
+        strength = (
+            SHAKE_STRENGTH_CAP
+            if big
+            else min(SHAKE_STRENGTH_CAP, 5.5 + 2.6 * math.log10(max(1.0, magnitude)))
+        )
+        self.shake_strength = strength
+        self.shake_duration = 0.55 if big else 0.35
+        self.shake_timer = self.shake_duration
+        self.play_settlement_impact(big)
+        self.spawn_settlement_sparks(
+            position,
+            120 if big else 34,
+            390.0 if big else 230.0,
+            big=big,
+        )
+
+    def spawn_settlement_sparks(
+        self,
+        position: pygame.Vector2,
+        count: int,
+        speed: float,
+        big: bool = False,
+    ) -> None:
+        for _ in range(count):
+            if big and self.visual_rng.random() < 0.82:
+                angle = self.visual_rng.uniform(math.pi + 0.12, math.tau - 0.12)
+            else:
+                angle = self.visual_rng.uniform(0, math.tau)
+            velocity = (
+                pygame.Vector2(math.cos(angle), math.sin(angle))
+                * self.visual_rng.uniform(speed * 0.5, speed)
+            )
+            life = self.visual_rng.uniform(0.55, 0.95) if big else self.visual_rng.uniform(0.35, 0.65)
+            self.settlement_particles.append(
+                DeathParticle(
+                    position.copy(),
+                    velocity,
+                    life,
+                    life,
+                    self.visual_rng.uniform(2.4, 5.8) if big else self.visual_rng.uniform(1.8, 3.8),
+                )
+            )
+        if len(self.settlement_particles) > DEATH_PARTICLE_CAP:
+            del self.settlement_particles[:-DEATH_PARTICLE_CAP]
+
+    def finish_settlement(self) -> None:
+        self.settlement = None
+        self.settlement_particles = []
+        if self.world == 8:
+            self.mode = Mode.CHALLENGE_CHOICE
+            self.sync_mouse_mode()
+        elif self.world >= MAX_WORLD:
+            self.mode = Mode.VICTORY
+            self.sync_mouse_mode()
+        else:
+            self.enter_shop()
+
+    def draw_settlement(self) -> None:
+        settlement = self.settlement
+        assert settlement is not None
+        shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        shade.fill((5, 7, 12, 165))
+        self.screen.blit(shade, (0, 0))
+
+        if settlement.phase == "slowmo":
+            banner = self.font_large.render(f"世界 {self.world} 通关！", True, GREEN)
+            banner.set_alpha(round(255 * min(1.0, settlement.timer / 0.5)))
+            self.screen.blit(banner, banner.get_rect(center=(WIDTH // 2, 110)))
+            return
+
+        panel = self.settlement_panel_rect()
+        panel.y = settlement.panel_y
+        pygame.draw.rect(self.screen, PANEL, panel, border_radius=16)
+        pygame.draw.rect(self.screen, CYAN, panel, 3, border_radius=16)
+        self.blit_text(
+            f"世界 {self.world}/{MAX_WORLD} 通关结算",
+            (panel.x + 40, panel.y + 22),
+            WHITE,
+            self.font_large,
+        )
+
+        shown = self.settlement_shown_rows()
+        for index, row in enumerate(settlement.rows):
+            if index >= shown:
+                continue
+            x, y = self.settlement_row_position(index)
+            pop = 1.0
+            if index == shown - 1 and settlement.pop_timer < 0.22:
+                pop = 1.0 + 0.25 * (0.22 - settlement.pop_timer) / 0.22
+            label = self.font.render(row.label, True, WHITE)
+            label = pygame.transform.rotozoom(label, 0, pop)
+            self.screen.blit(label, (x, y))
+            if row.detail_text:
+                self.blit_text(row.detail_text, (x, y + 38), MUTED, self.font_small)
+            value = self.font_large.render(row.value_text, True, row.color)
+            value = pygame.transform.rotozoom(value, 0, pop)
+            self.screen.blit(value, value.get_rect(topright=(panel.right - 56, y)))
+
+        if settlement.phase in ("rank_drop", "rank", "button"):
+            center = pygame.Vector2(self.settlement_score_center())
+            pop = 1.0
+            if settlement.phase == "rank_drop":
+                progress = min(1.0, settlement.timer / SETTLEMENT_RANK_DROP_DURATION)
+                center.y -= 360 * (1.0 - progress) ** 3
+                pop = 1.0 + 0.28 * (1.0 - progress)
+            elif settlement.phase == "rank" and settlement.pop_timer < 0.35:
+                pop = 1.0 + (SETTLEMENT_RANK_IMPACT_SCALE - 1.0) * (
+                    0.35 - settlement.pop_timer
+                ) / 0.35
+            rank_text = self.settlement_rank_sprite()
+            rank_text = pygame.transform.rotozoom(rank_text, 0, pop)
+            self.screen.blit(rank_text, rank_text.get_rect(center=center))
+            if settlement.phase != "rank_drop":
+                score_text = self.font_large.render(f"总分 {settlement.score}", True, WHITE)
+                self.screen.blit(score_text, score_text.get_rect(center=(center.x, center.y + 62)))
+            if settlement.phase == "button":
+                if self.world == 8:
+                    label = "选择终局挑战"
+                elif self.world >= MAX_WORLD:
+                    label = "查看最终战绩"
+                else:
+                    label = "进入世界商店"
+                self.draw_menu_button(self.settlement_button_rect(), label, GREEN)
+
+        layer = self.visual_effect_layer
+        layer.fill((0, 0, 0, 0))
+        rank_color = self.settlement_rank_color()
+        if settlement.phase in ("rank", "button") and settlement.pop_timer < 0.65:
+            impact = self.settlement_rank_impact_position()
+            progress = min(1.0, settlement.pop_timer / 0.65)
+            ring_alpha = round(230 * (1.0 - progress) ** 2)
+            ring_width = max(2, round(8 * (1.0 - progress)))
+            ring = pygame.Rect(0, 0, round(80 + 420 * progress), round(20 + 90 * progress))
+            ring.center = impact
+            pygame.draw.ellipse(layer, (*rank_color, ring_alpha), ring, ring_width)
+            if progress < 0.28:
+                flash = 1.0 - progress / 0.28
+                pygame.draw.circle(
+                    layer,
+                    (*rank_color, round(175 * flash)),
+                    impact,
+                    round(54 * flash + 12),
+                )
+        for particle in self.settlement_particles:
+            alpha = round(255 * max(0.0, particle.life / particle.max_life))
+            radius = max(1, round(particle.radius))
+            tail = particle.position - particle.velocity * 0.045
+            pygame.draw.line(
+                layer,
+                (*rank_color, round(alpha * 0.68)),
+                tail,
+                particle.position,
+                max(1, radius),
+            )
+            pygame.draw.circle(
+                layer,
+                (*rank_color, round(alpha * 0.38)),
+                particle.position,
+                radius * 2,
+            )
+            pygame.draw.circle(
+                layer,
+                (250, 252, 255, alpha),
+                particle.position,
+                radius,
+            )
+        self.screen.blit(layer, (0, 0))
+
+    def draw_blood_stains(self) -> None:
+        if not self.blood_stains:
+            return
+        layer = self.visual_effect_layer
+        layer.fill((0, 0, 0, 0))
+        for stain in self.blood_stains:
+            fade = min(1.0, stain.life / 1.5)
+            alpha = round(185 * fade)
+            points = [stain.position + point for point in stain.points]
+            pygame.draw.polygon(layer, (116, 12, 25, alpha), points)
+            outer_points = [stain.position + point * 1.18 for point in stain.points]
+            middle_points = [stain.position + point * 1.10 for point in stain.points]
+            pygame.draw.polygon(layer, (186, 14, 32, round(alpha * 0.14)), outer_points, 6)
+            pygame.draw.polygon(layer, (218, 22, 40, round(alpha * 0.24)), middle_points, 4)
+            pygame.draw.polygon(layer, (245, 38, 54, round(alpha * 0.63)), points, 4)
+            for offset, drop_radius in stain.droplets:
+                center = stain.position + offset
+                radius = max(1, round(drop_radius))
+                pygame.draw.circle(
+                    layer,
+                    (128, 10, 22, round(alpha * 0.90)),
+                    center,
+                    radius,
+                )
+                pygame.draw.circle(
+                    layer,
+                    (190, 16, 34, round(alpha * 0.18)),
+                    center,
+                    radius + 2,
+                    2,
+                )
+                pygame.draw.circle(
+                    layer,
+                    (232, 30, 46, round(alpha * 0.38)),
+                    center,
+                    radius,
+                    1,
+                )
+        self.screen.blit(layer, (0, 0))
+
+    def draw_death_particles(self) -> None:
+        if not self.death_particles:
+            return
+        layer = self.visual_effect_layer
+        layer.fill((0, 0, 0, 0))
+        for particle in self.death_particles:
+            alpha = round(255 * max(0.0, particle.life / particle.max_life))
+            pygame.draw.circle(
+                layer,
+                (245, 248, 255, alpha),
+                particle.position,
+                max(1, round(particle.radius)),
+            )
+        self.screen.blit(layer, (0, 0))
+
+    def apply_glow(self) -> None:
+        if self.glow_brightness <= 0 or self.glow_opacity <= 0:
+            return
+        spread = self.glow_spread
+        weights = (
+            0.62 - 0.28 * spread,
+            0.24 + 0.02 * spread,
+            0.04 + 0.26 * spread,
+        )
+        threshold = round(46 - self.glow_feather * 28)
+        blur_base = 1 + round(self.glow_feather * 2)
+        intensity = self.glow_brightness * self.glow_opacity * 2.75
+        self.glow_source_surface.blit(self.screen, (0, 0))
+
+        for index, (small, blurred, large) in enumerate(self.glow_cache):
+            pygame.transform.smoothscale(self.glow_source_surface, small.get_size(), small)
+            small.fill((threshold, threshold, threshold), special_flags=pygame.BLEND_RGB_SUB)
+            if index == 0:
+                blurred.blit(small, (0, 0))
+            else:
+                pygame.transform.box_blur(
+                    small,
+                    blur_base + index,
+                    dest_surface=blurred,
+                )
+            pygame.transform.smoothscale(blurred, (WIDTH, HEIGHT), large)
+
+            strength = intensity * weights[index]
+            while strength >= 1.0:
+                self.screen.blit(large, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+                strength -= 1.0
+            if strength > 0:
+                multiplier = round(255 * strength)
+                large.fill(
+                    (multiplier, multiplier, multiplier),
+                    special_flags=pygame.BLEND_RGB_MULT,
+                )
+                self.screen.blit(large, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+
+    def apply_screen_shake(self) -> None:
+        if self.shake_timer <= 0 or self.shake_intensity <= 0:
+            return
+        fade = self.shake_timer / max(0.001, self.shake_duration)
+        magnitude = self.shake_strength * self.shake_intensity * fade
+        offset = (
+            round(self.visual_rng.uniform(-magnitude, magnitude)),
+            round(self.visual_rng.uniform(-magnitude, magnitude)),
+        )
+        frame = self.screen.copy()
+        self.screen.fill(BG)
+        self.screen.blit(frame, offset)
 
     def draw(self) -> None:
         self.screen.fill(BG)
@@ -2155,25 +3824,46 @@ class Game:
             self.draw_tutorial()
         elif self.mode == Mode.SETTINGS:
             self.draw_settings()
+        elif self.mode == Mode.CHALLENGE_CHOICE:
+            self.draw_challenge_choice()
         elif self.mode == Mode.SHOP:
             self.draw_shop()
+            self.apply_glow()
         else:
             self.draw_arena()
+            self.draw_blood_stains()
             self.draw_gates()
             self.draw_enemies()
             self.draw_bosses()
+            self.draw_death_particles()
             self.draw_bullets()
             self.draw_enemy_bullets()
             self.draw_player()
-            if self.mode == Mode.PLAYING:
+            self.apply_glow()
+            if self.mode == Mode.PLAYING and (
+                self.settlement is None or self.settlement.phase == "slowmo"
+            ):
                 self.draw_cursor_effects()
             self.draw_hud()
+            if self.settlement is not None:
+                self.draw_settlement()
             if self.mode == Mode.PAUSED:
                 self.draw_pause_menu()
             elif self.mode == Mode.GAME_OVER:
-                self.draw_overlay("防线失守", f"{self.death_reason} | 按 R 重开")
+                if self.challenge_checkpoint is not None and self.world >= 9:
+                    self.draw_overlay("终局挑战失败", self.death_reason)
+                    self.draw_challenge_failure_actions()
+                else:
+                    self.draw_overlay("防线失守", f"{self.death_reason} | 按 R 重开")
             elif self.mode == Mode.VICTORY:
-                self.draw_overlay("八世界通关", f"最终金币 {self.gold} | 按 R 再来一局")
+                self.draw_overlay(
+                    "十世界通关",
+                    f"最终人口 {format_number(self.population)} | "
+                    f"金币 {self.gold} | 按 R 再来一局",
+                )
+        if self.dev_panel_open:
+            self.draw_dev_panel()
+        self.apply_screen_shake()
         pygame.display.flip()
 
     @staticmethod
@@ -2185,6 +3875,16 @@ class Game:
         return pygame.Rect(55, 625, 150, 52)
 
     @staticmethod
+    def challenge_choice_rect(action: str) -> pygame.Rect:
+        x = WIDTH // 2 - 370 if action == "restart" else WIDTH // 2 + 30
+        return pygame.Rect(x, 505, 340, 68)
+
+    @staticmethod
+    def challenge_failure_rect(action: str) -> pygame.Rect:
+        x = WIDTH // 2 - 330 if action == "retry" else WIDTH // 2 + 20
+        return pygame.Rect(x, 455, 310, 62)
+
+    @staticmethod
     def settings_volume_rows() -> tuple[tuple[str, str], ...]:
         return (
             ("bgm", "背景音乐"),
@@ -2194,23 +3894,84 @@ class Game:
             ("kill", "敌人击杀"),
             ("gate_hit", "门命中"),
             ("gate_collect", "吃门提示"),
+            ("settlement", "结算音效"),
         )
 
     @staticmethod
     def settings_volume_button_rect(index: int, direction: int) -> pygame.Rect:
-        return pygame.Rect(810 if direction < 0 else 1055, Game.settings_audio_y(index) + 7, 48, 42)
+        column_x = 55 if index < 4 else 650
+        return pygame.Rect(
+            column_x + (330 if direction < 0 else 480),
+            Game.settings_audio_y(index) + 5,
+            42,
+            38,
+        )
 
     @staticmethod
     def settings_audio_y(index: int) -> int:
-        return 250 + index * 42
+        return 376 + (index % 4) * 55
+
+    @staticmethod
+    def settings_visual_rows() -> tuple[tuple[str, str], ...]:
+        return (
+            ("shake", "屏幕震动"),
+            ("glow_brightness", "辉光亮度"),
+            ("glow_spread", "辉光扩散"),
+            ("glow_opacity", "辉光透明度"),
+            ("glow_feather", "辉光羽化"),
+        )
+
+    @staticmethod
+    def settings_visual_y(index: int) -> int:
+        return 245 + (index // 3) * 47
+
+    @staticmethod
+    def settings_visual_x(index: int) -> int:
+        return 35 + (index % 3) * 410
+
+    @staticmethod
+    def settings_visual_button_rect(index: int, direction: int) -> pygame.Rect:
+        column_x = Game.settings_visual_x(index)
+        return pygame.Rect(
+            column_x + (220 if direction < 0 else 340),
+            Game.settings_visual_y(index) + 4,
+            36,
+            38,
+        )
+
+    def visual_effect_value(self, kind: str) -> float:
+        return {
+            "shake": self.shake_intensity,
+            "glow_brightness": self.glow_brightness,
+            "glow_spread": self.glow_spread,
+            "glow_opacity": self.glow_opacity,
+            "glow_feather": self.glow_feather,
+        }[kind]
+
+    def adjust_visual_effect(self, kind: str, direction: int) -> None:
+        value = round(max(0.0, min(1.0, self.visual_effect_value(kind) + direction * 0.1)), 1)
+        if kind == "shake":
+            self.shake_intensity = value
+        elif kind == "glow_brightness":
+            self.glow_brightness = value
+        elif kind == "glow_spread":
+            self.glow_spread = value
+        elif kind == "glow_opacity":
+            self.glow_opacity = value
+        else:
+            self.glow_feather = value
 
     @staticmethod
     def settings_mouse_sensitivity_button_rect(direction: int) -> pygame.Rect:
-        return pygame.Rect(810 if direction < 0 else 1055, 152, 48, 42)
+        return pygame.Rect(810 if direction < 0 else 1055, 108, 48, 38)
 
     @staticmethod
     def settings_mouse_sensitivity_value_rect() -> pygame.Rect:
-        return pygame.Rect(885, 152, 150, 42)
+        return pygame.Rect(885, 108, 150, 38)
+
+    @staticmethod
+    def settings_crosshair_button_rect(direction: int) -> pygame.Rect:
+        return pygame.Rect(810 if direction < 0 else 1055, 165, 48, 42)
 
     def preview_volume(self, kind: str) -> None:
         if kind == "bgm":
@@ -2252,23 +4013,80 @@ class Game:
         pygame.draw.rect(self.screen, CYAN, accent)
         title = self.font_huge.render("双线火力", True, WHITE)
         self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 205)))
-        subtitle = self.font.render("八世界生存构筑测试版", True, YELLOW)
+        subtitle = self.font.render("八世界主线 + 双Boss终局挑战", True, YELLOW)
         self.screen.blit(subtitle, subtitle.get_rect(center=(WIDTH // 2, 276)))
         for index, (label, color) in enumerate((("开始游戏", GREEN), ("简易教学", CYAN), ("设置", PURPLE))):
             self.draw_menu_button(self.main_menu_button_rect(index), label, color)
         self.blit_text("Enter / Space 快速开始", (WIDTH // 2 - 112, 620), MUTED, self.font_tiny)
 
+    def draw_challenge_choice(self) -> None:
+        self.draw_menu_background()
+        title = self.font_huge.render("世界8通关", True, GREEN)
+        self.screen.blit(title, title.get_rect(center=(WIDTH // 2, 155)))
+        self.blit_text(
+            "主线已经完成。可立即开启新局，或带着当前构筑挑战两个终局Boss。",
+            (WIDTH // 2 - 385, 245),
+            WHITE,
+            self.font,
+        )
+        stats = (
+            f"继承人口 {format_number(self.population)}",
+            f"金币 {self.gold}",
+            f"参考DPS {format_number(self.current_dps())}",
+        )
+        for index, value in enumerate(stats):
+            self.blit_text(value, (WIDTH // 2 - 300 + index * 220, 330), YELLOW, self.font_small)
+        self.blit_text(
+            "世界9、10各限时90秒；失败后可从世界9严格还原重试。",
+            (WIDTH // 2 - 300, 400),
+            MUTED,
+            self.font_small,
+        )
+        self.draw_menu_button(
+            self.challenge_choice_rect("restart"),
+            "重新开始世界1（R）",
+            CYAN,
+        )
+        self.draw_menu_button(
+            self.challenge_choice_rect("continue"),
+            "继续挑战世界9（Enter）",
+            OVERLOAD,
+        )
+
+    def draw_challenge_failure_actions(self) -> None:
+        self.draw_menu_button(
+            self.challenge_failure_rect("retry"),
+            "从世界9重试（R）",
+            OVERLOAD,
+        )
+        self.draw_menu_button(
+            self.challenge_failure_rect("new"),
+            "开始全新一局（N）",
+            CYAN,
+        )
+
     def draw_tutorial(self) -> None:
         self.draw_menu_background()
         self.blit_text("测试员简易教学", (55, 40), WHITE, self.font_large)
-        self.blit_text("目标：撑过每个世界并在120秒前击杀90秒出现的大Boss", (58, 105), YELLOW, self.font_small)
+        self.blit_text(
+            "目标：完成八世界主线，并选择是否挑战世界9、10终局Boss",
+            (58, 105),
+            YELLOW,
+            self.font_small,
+        )
         sections = (
             ("移动与射击", "WASD移动；鼠标瞄准；按住左键自动射击。\n人口既是生命，也是子弹伤害倍率。"),
             ("敌人与Boss", "普通怪接触会损失人口，精英和Boss还会发射弹幕。\n小Boss约25秒、中Boss 60秒、大Boss 90秒出现。"),
             ("门的玩法", "射击数字门改变门上的人口数；解锁特殊门获得临时增益。\n移动到门内吃门。穿透不能穿门，反弹子弹会从门上弹回。"),
-            ("商店与构筑", "击杀Boss获得金币；世界结束后购买卡牌或永久属性。\n最多携带5张卡。左键购买/出售，右键查看卡牌详情。"),
+            (
+                "商店与构筑",
+                "击杀Boss获得金币；世界1～7及世界9结束后进入商店。\n最多携带5张卡。左键购买/出售，右键查看卡牌详情。",
+            ),
             ("测试提示", "Esc查看当前DPS、暴击和总音量；R可在暂停菜单重新开始。\n关注异常DPS、卡牌联动、碰撞和音频反馈。"),
-            ("胜利条件", "依次击败8个世界的大Boss。人口低于2或120秒未完成则失败。"),
+            (
+                "胜利条件",
+                "前8个世界完成主线；之后可挑战世界9、10终局Boss。\n主线限时120秒，终局Boss世界限时90秒。",
+            ),
         )
         for index, (heading, body) in enumerate(sections):
             column = index % 2
@@ -2284,9 +4102,9 @@ class Game:
     def draw_settings(self) -> None:
         self.draw_menu_background()
         self.blit_text("设置", (55, 40), WHITE, self.font_large)
-        self.blit_text("鼠标灵敏度范围 0.1–5.0，点击数字后可直接键盘输入", (58, 105), MUTED, self.font_small)
+        self.blit_text("鼠标灵敏度范围 0.1-5.0，点击数字后可直接键盘输入", (58, 76), MUTED, self.font_small)
 
-        sensitivity_rect = pygame.Rect(270, 145, 850, 52)
+        sensitivity_rect = pygame.Rect(270, 103, 850, 48)
         pygame.draw.rect(self.screen, PANEL, sensitivity_rect, border_radius=8)
         self.blit_text("鼠标灵敏度", (sensitivity_rect.x + 22, sensitivity_rect.y + 13), WHITE, self.font_small)
         sensitivity_minus = self.settings_mouse_sensitivity_button_rect(-1)
@@ -2305,20 +4123,51 @@ class Game:
         sensitivity = self.font.render(text, True, CYAN)
         self.screen.blit(sensitivity, sensitivity.get_rect(center=value_rect.center))
 
-        self.blit_text("声音", (58, 225), WHITE, self.font_small)
+        crosshair_rect = pygame.Rect(270, 160, 850, 52)
+        pygame.draw.rect(self.screen, PANEL, crosshair_rect, border_radius=8)
+        self.blit_text("准星预设", (crosshair_rect.x + 22, crosshair_rect.y + 13), WHITE, self.font_small)
+        crosshair_minus = self.settings_crosshair_button_rect(-1)
+        crosshair_plus = self.settings_crosshair_button_rect(1)
+        pygame.draw.rect(self.screen, GRID, crosshair_minus, border_radius=7)
+        pygame.draw.rect(self.screen, GRID, crosshair_plus, border_radius=7)
+        self.blit_text("<", (crosshair_minus.x + 17, crosshair_minus.y + 5), WHITE, self.font)
+        self.blit_text(">", (crosshair_plus.x + 14, crosshair_plus.y + 5), WHITE, self.font)
+        preview = self._render_crosshair_sprite(0.55)
+        self.screen.blit(preview, preview.get_rect(center=(930, crosshair_rect.centery)))
+        preset_name = self.font_small.render(self.crosshair_preset_name(), True, CYAN)
+        self.screen.blit(preset_name, (crosshair_rect.x + 128, crosshair_rect.y + 13))
+
+        self.blit_text("画面特效", (58, 218), WHITE, self.font_small)
+        for index, (kind, label) in enumerate(self.settings_visual_rows()):
+            y = self.settings_visual_y(index)
+            x = self.settings_visual_x(index)
+            rect = pygame.Rect(x, y, 390, 45)
+            pygame.draw.rect(self.screen, PANEL, rect, border_radius=8)
+            self.blit_text(label, (rect.x + 14, rect.y + 9), WHITE, self.font_small)
+            minus = self.settings_visual_button_rect(index, -1)
+            plus = self.settings_visual_button_rect(index, 1)
+            pygame.draw.rect(self.screen, GRID, minus, border_radius=7)
+            pygame.draw.rect(self.screen, GRID, plus, border_radius=7)
+            self.blit_text("-", (minus.x + 14, minus.y + 3), WHITE, self.font)
+            self.blit_text("+", (plus.x + 10, plus.y + 3), WHITE, self.font)
+            value = self.font.render(f"{self.visual_effect_value(kind):.0%}", True, CYAN)
+            self.screen.blit(value, value.get_rect(center=(rect.x + 298, rect.centery)))
+
+        self.blit_text("声音", (58, 350), WHITE, self.font_small)
         for index, (kind, label) in enumerate(self.settings_volume_rows()):
             y = self.settings_audio_y(index)
-            rect = pygame.Rect(270, y, 850, 52)
+            x = 55 if index < 4 else 650
+            rect = pygame.Rect(x, y, 575, 48)
             pygame.draw.rect(self.screen, PANEL, rect, border_radius=8)
-            self.blit_text(label, (rect.x + 22, rect.y + 13), WHITE, self.font_small)
+            self.blit_text(label, (rect.x + 18, rect.y + 12), WHITE, self.font_small)
             minus = self.settings_volume_button_rect(index, -1)
             plus = self.settings_volume_button_rect(index, 1)
             pygame.draw.rect(self.screen, GRID, minus, border_radius=7)
             pygame.draw.rect(self.screen, GRID, plus, border_radius=7)
-            self.blit_text("-", (minus.x + 17, minus.y + 5), WHITE, self.font)
-            self.blit_text("+", (plus.x + 13, plus.y + 5), WHITE, self.font)
+            self.blit_text("-", (minus.x + 14, minus.y + 3), WHITE, self.font)
+            self.blit_text("+", (plus.x + 10, plus.y + 3), WHITE, self.font)
             value = self.font.render(f"{self.volume_value(kind):.0%}", True, CYAN)
-            self.screen.blit(value, value.get_rect(center=(955, rect.centery)))
+            self.screen.blit(value, value.get_rect(center=(rect.right - 150, rect.centery)))
         self.draw_menu_button(self.menu_back_rect(), "返回", CYAN)
 
     def draw_arena(self) -> None:
@@ -2387,13 +4236,47 @@ class Game:
     def draw_bosses(self) -> None:
         colors = {"small": ORANGE, "medium": PURPLE, "big": RED}
         for boss in self.bosses:
-            color = YELLOW if boss.windup_remaining is not None else colors[boss.kind]
+            base_color = colors[boss.kind]
+            if boss.variant == "commander":
+                base_color = ORANGE
+            elif boss.variant == "devourer":
+                base_color = PURPLE
+            color = YELLOW if boss.windup_remaining is not None else base_color
             pygame.draw.circle(self.screen, color, boss.position, boss.radius)
             pygame.draw.circle(self.screen, WHITE, boss.position, boss.radius, 3)
+            if boss.variant == "commander":
+                pygame.draw.rect(
+                    self.screen,
+                    WHITE,
+                    pygame.Rect(
+                        round(boss.position.x - boss.radius * 0.55),
+                        round(boss.position.y - boss.radius * 0.55),
+                        round(boss.radius * 1.1),
+                        round(boss.radius * 1.1),
+                    ),
+                    4,
+                )
+                if any(enemy.elite for enemy in self.enemies):
+                    pygame.draw.circle(
+                        self.screen,
+                        CYAN,
+                        boss.position,
+                        boss.radius + 10,
+                        5,
+                    )
+            elif boss.variant == "devourer":
+                for angle in range(0, 360, 120):
+                    direction = pygame.Vector2(0, -boss.radius * 0.78).rotate(
+                        angle + self.cursor_phase * 45
+                    )
+                    tip = boss.position + direction
+                    pygame.draw.circle(self.screen, YELLOW, tip, 7)
             if boss.kind == "big":
                 pygame.draw.circle(self.screen, DARK_RED, boss.position, round(boss.attack_range), 2)
             self.draw_health_bar(boss.position, boss.radius + 16, boss.hp, boss.max_hp, color, boss.radius * 3)
-            text = self.font_tiny.render(self.boss_name(boss.kind), True, WHITE)
+            text = self.font_tiny.render(
+                self.boss_name(boss.kind, boss.variant), True, WHITE
+            )
             self.screen.blit(text, text.get_rect(center=boss.position))
             if boss.windup_remaining is not None:
                 self.blit_text(f"100%斩杀 {max(0, boss.windup_remaining):.1f}", boss.position + pygame.Vector2(-62, 67), YELLOW, self.font_small)
@@ -2413,12 +4296,27 @@ class Game:
         pygame.draw.rect(self.screen, (10, 12, 19), (0, 0, WIDTH, 64))
         self.blit_text(f"人口 {format_number(self.population)}", (18, 15), CYAN, self.font)
         self.blit_text(f"金币 {self.gold}", (180, 15), YELLOW, self.font)
-        self.blit_text(f"世界 {self.world}/8", (310, 15), WHITE, self.font)
-        remaining = max(0, math.ceil(WORLD_DURATION - self.elapsed))
+        self.blit_text(f"世界 {self.world}/{MAX_WORLD}", (310, 15), WHITE, self.font)
+        remaining = max(0, math.ceil(world_duration(self.world) - self.elapsed))
         self.blit_text(f"截止 {remaining}s", (445, 15), RED if remaining <= 30 else WHITE, self.font)
         self.blit_text(f"伤害 {self.current_damage():.1f}  射速 {self.current_fire_rate():.1f}/s", (610, 18), MUTED, self.font_small)
         self.blit_text(f"参考DPS {format_number(world_dps_threshold(self.world))}", (825, 18), YELLOW, self.font_small)
-        next_event = "小Boss 25~30s" if self.elapsed < 25 else "中Boss 60s" if self.elapsed < 60 else "大Boss 90s" if self.elapsed < 90 else "击杀大Boss！"
+        final_boss = next((boss for boss in self.bosses if boss.kind == "big"), None)
+        if self.world == 9 and final_boss is not None:
+            shield = "护盾开" if any(enemy.elite for enemy in self.enemies) else "护盾关"
+            next_event = f"统帅 P{final_boss.phase} {shield}"
+        elif self.world == 10 and final_boss is not None:
+            next_event = f"吞门者 P{final_boss.phase} 狂暴{final_boss.rage_stacks}/5"
+        else:
+            next_event = (
+                "小Boss 25~30s"
+                if self.elapsed < 25
+                else "中Boss 60s"
+                if self.elapsed < 60
+                else "大Boss 90s"
+                if self.elapsed < 90
+                else "击杀大Boss！"
+            )
         self.blit_text(next_event, (1010, 18), YELLOW, self.font_small)
         if self.message_timer > 0:
             surface = self.font_small.render(self.message, True, YELLOW)
@@ -2518,13 +4416,24 @@ class Game:
         pygame.draw.rect(self.screen, GREEN, next_rect, border_radius=8)
         charged = max(0, round(self.apply_stat(self.refresh_cost, "refresh_cost", TARGET_PLAYER)))
         self.blit_text(f"刷新 {charged}金", (refresh.x + 25, refresh.y + 13), WHITE, self.font_small)
-        self.blit_text("下一世界", (next_rect.x + 25, next_rect.y + 13), BG, self.font_small)
-        self.blit_text(
-            f"下世界基础：人口 {self.default_population} | 伤害 {self.default_damage:.1f} | 射速 {self.default_fire_rate:.1f}",
-            (910, 575),
-            MUTED,
-            self.font_tiny,
-        )
+        next_label = "挑战世界10" if self.world == 9 else "下一世界"
+        self.blit_text(next_label, (next_rect.x + 15, next_rect.y + 13), BG, self.font_small)
+        if self.world == 9:
+            next_population = (
+                self.population
+                + self.challenge_world_growth_bonus
+                + self.challenge_shop_population_bonus
+            )
+            summary = (
+                f"世界10继承：人口 {format_number(next_population)} | "
+                f"伤害 {self.default_damage:.1f} | 射速 {self.default_fire_rate:.1f}"
+            )
+        else:
+            summary = (
+                f"下世界基础：人口 {self.default_population} | "
+                f"伤害 {self.default_damage:.1f} | 射速 {self.default_fire_rate:.1f}"
+            )
+        self.blit_text(summary, (910, 575), MUTED, self.font_tiny)
         if self.message_timer > 0:
             self.blit_text(self.message, (910, 610), YELLOW, self.font_tiny)
         if self.detail_card:
@@ -2637,6 +4546,7 @@ class Game:
             self.screen.blit(volume, volume.get_rect(center=(WIDTH // 2 + 91, y + 19)))
 
         self.blit_text("Esc 继续游戏", (panel.x + 175, 525), WHITE, self.font_small)
+        self.blit_text("F1 开发者测试面板", (panel.x + 45, 498), CYAN, self.font_small)
         restart = self.pause_restart_rect()
         pygame.draw.rect(self.screen, RED, restart, border_radius=10)
         restart_label = self.font.render("重新开始  R", True, WHITE)

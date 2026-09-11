@@ -15,6 +15,8 @@ from logic import (
     scaled_speed,
     shot_damage,
     world_dps_threshold,
+    world_boss_spawn_time,
+    world_duration,
     world_multiplier,
     world_target_health,
 )
@@ -50,9 +52,15 @@ class LogicTests(unittest.TestCase):
         self.assertEqual(world_dps_threshold(1), 45_000)
         self.assertEqual(world_dps_threshold(5), 1_000_000)
         self.assertEqual(world_dps_threshold(8), 8_000_000)
+        self.assertEqual(world_dps_threshold(9), 300_000_000)
+        self.assertEqual(world_dps_threshold(10), 900_000_000)
         self.assertEqual(world_target_health(1, "big"), 675_000)
         self.assertEqual(world_target_health(8, "big"), 120_000_000)
-        for world in range(1, 9):
+        self.assertEqual(world_target_health(9, "big"), 18_000_000_000)
+        self.assertEqual(world_target_health(10, "big"), 72_000_000_000)
+        self.assertEqual(world_target_health(9, "normal"), 5_000)
+        self.assertEqual(world_target_health(10, "elite"), 240_000)
+        for world in range(1, 11):
             big_health = world_target_health(world, "big")
             self.assertEqual(world_target_health(world, "small"), big_health / 8)
             self.assertEqual(world_target_health(world, "medium"), big_health / 4)
@@ -61,7 +69,16 @@ class LogicTests(unittest.TestCase):
     def test_boss_windup_movement_pressure_scales_by_world(self) -> None:
         self.assertAlmostEqual(boss_windup_move_factor(1), 0.10)
         self.assertAlmostEqual(boss_windup_move_factor(8), 0.50)
+        self.assertAlmostEqual(boss_windup_move_factor(9), 0.55)
+        self.assertAlmostEqual(boss_windup_move_factor(10), 0.60)
         self.assertAlmostEqual(boss_windup_move_factor(4), 0.10 + 3 * 0.40 / 7)
+
+    def test_final_world_timing(self) -> None:
+        self.assertEqual(world_duration(8), 120.0)
+        self.assertEqual(world_duration(9), 90.0)
+        self.assertEqual(world_duration(10), 90.0)
+        self.assertEqual(world_boss_spawn_time(8), 90.0)
+        self.assertEqual(world_boss_spawn_time(9), 0.0)
 
     def test_execution_uses_current_health_percentage(self) -> None:
         self.assertTrue(execution_ready(50, 100, 0.50))
@@ -100,7 +117,8 @@ class LogicTests(unittest.TestCase):
     def test_world_multiplier_is_bounded(self) -> None:
         self.assertEqual(world_multiplier(1), 1.0)
         self.assertEqual(world_multiplier(8), 4.0)
-        self.assertEqual(world_multiplier(99), 4.0)
+        self.assertEqual(world_multiplier(9), 5.0)
+        self.assertEqual(world_multiplier(99), 6.25)
 
 
 if __name__ == "__main__":
