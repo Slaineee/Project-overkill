@@ -5,7 +5,12 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('data/cards.json', 'data'), ('SFX', 'SFX'), ('BGM', 'BGM')],
+    datas=[
+        ('data/cards.json', 'data'),
+        ('SFX', 'SFX'),
+        ('BGM', 'BGM'),
+        ('assets', 'assets'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -36,3 +41,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+

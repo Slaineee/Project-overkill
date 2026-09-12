@@ -89,6 +89,32 @@ DEATH_PARTICLE_CAP = 360
 BLOOD_STAIN_CAP = 96
 SHAKE_STRENGTH_CAP = 18.0
 GLOW_LEVEL_SCALES = (2, 4, 8)
+NORMAL_ENEMY_SPRITE_SIZE = 40
+NORMAL_ENEMY_FRAME_COUNT = 4
+NORMAL_ENEMY_DIRECTION_COUNT = 16
+NORMAL_ENEMY_ANIMATION_FPS = 7.0
+ELITE_SPRITE_SIZE = 64
+ELITE_KINDS = ("guardian", "archon", "hunter")
+ELITE_NAMES = {
+    "guardian": "棱镜守卫",
+    "archon": "链接执政官",
+    "hunter": "过载猎手",
+}
+ELITE_COLORS = {
+    "guardian": CYAN,
+    "archon": (70, 235, 255),
+    "hunter": ORANGE,
+}
+BOSS_SPRITE_SIZES = {"small": 72, "medium": 88, "big": 112}
+PLAYER_BODY_STEP_DEGREES = 90.0
+PLAYER_BODY_TURN_THRESHOLD = PLAYER_BODY_STEP_DEGREES / 2
+ESCORT_RING_SPECS = (
+    (100_000, 50.0, 12),
+    (8_000_000, 70.0, 16),
+    (100_000_000, 92.0, 20),
+)
+BLOOD_STAIN_VARIANT_COUNT = 15
+BLOOD_STAIN_ROTATION_COUNT = 4
 KILL_CHANNEL_IDS = (3, 4, 5, 8)
 BOSS_KILL_CHANNEL_ID = 7
 BOSS_KILL_VOLUME_BOOST = 1.20
@@ -192,6 +218,18 @@ class Bullet:
 
 
 @dataclass
+class EliteShield:
+    angle: float
+    hp: float
+    max_hp: float
+    orbit_radius: float = 27.0
+    radius: float = 10.0
+
+    def world_position(self, owner: pygame.Vector2) -> pygame.Vector2:
+        return owner + pygame.Vector2(0, -self.orbit_radius).rotate(self.angle)
+
+
+@dataclass
 class Enemy:
     position: pygame.Vector2
     hp: float
@@ -199,11 +237,28 @@ class Enemy:
     speed: float
     radius: int
     elite: bool = False
+    elite_kind: str | None = None
     shoot_timer: float = 2.5
+    animation_time: float = 0.0
+    heading_degrees: float = 180.0
+    shields: list[EliteShield] = field(default_factory=list)
+    elite_state: str = "approach"
+    state_timer: float = 0.0
+    vulnerable_timer: float = 0.0
+    disabled_timer: float = 0.0
+    linked_target_ids: set[int] = field(default_factory=set)
+    charge_direction: pygame.Vector2 = field(default_factory=pygame.Vector2)
 
-    def update(self, dt: float, player: pygame.Vector2) -> None:
+    def update(self, dt: float, player: pygame.Vector2, speed_multiplier: float = 1.0) -> None:
+        if self.disabled_timer > 0:
+            self.disabled_timer = max(0.0, self.disabled_timer - dt)
+            self.animation_time += dt
+            return
         direction = pygame.Vector2(0, 1) if self.position.y < HEIGHT * 0.48 else normalized(player - self.position)
-        self.position += direction * self.speed * dt
+        if direction.length_squared():
+            self.heading_degrees = math.degrees(math.atan2(-direction.x, -direction.y))
+        self.animation_time += dt
+        self.position += direction * self.speed * max(0.0, speed_multiplier) * dt
 
 
 @dataclass
@@ -238,6 +293,7 @@ class DeathParticle:
     life: float
     max_life: float
     radius: float
+    color: tuple[int, int, int] = (245, 248, 255)
 
 
 @dataclass
@@ -247,6 +303,8 @@ class BloodStain:
     droplets: tuple[tuple[pygame.Vector2, float], ...]
     life: float
     max_life: float
+    color: tuple[int, int, int] = (73, 190, 67)
+    sprite: pygame.Surface | None = None
 
 
 @dataclass
@@ -438,6 +496,12 @@ class ChallengeCheckpoint:
 
 class Game:
     _audio_cache: tuple[object, ...] | None = None
+    _player_body_sprite_cache: tuple[pygame.Surface, ...] | None = None
+    _player_gun_sprite_cache: pygame.Surface | None = None
+    _normal_enemy_sprite_cache: tuple[tuple[pygame.Surface, ...], ...] | None = None
+    _elite_sprite_cache: dict[str, tuple[pygame.Surface, ...]] | None = None
+    _boss_sprite_cache: dict[str, tuple[pygame.Surface, ...]] | None = None
+    _blood_stain_sprite_cache: tuple[pygame.Surface, ...] | None = None
 
     def __init__(self, show_main_menu: bool = False) -> None:
         os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_WARP", "0")
@@ -446,6 +510,9 @@ class Game:
         pygame.display.set_caption("火力过载 - 十世界终局挑战")
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
+        self.normal_enemy_sprites = self.load_normal_enemy_sprites()
+        self.elite_sprites = self.load_elite_sprites()
+        self.boss_sprites = self.load_boss_sprites()
         self.font_tiny = load_font(16)
         self.font_small = load_font(20)
         self.font = load_font(26)
@@ -467,6 +534,11 @@ class Game:
         self.dev_panel_open = False
         self.dev_editing_field: str | None = None
         self.dev_input_text = ""
+        self.sprite_calibration_open = False
+        self.sprite_calibration_editing: str | None = None
+        self.sprite_calibration_input = ""
+        self.player_center_offset = pygame.Vector2()
+        self.gun_center_offset = pygame.Vector2()
         self.cursor_time = 0.0
         self.cursor_phase = 0.0
         self.cursor_trail: list[tuple[float, pygame.Vector2]] = []
@@ -541,6 +613,101 @@ class Game:
         if show_main_menu:
             self.mode = Mode.MAIN_MENU
             self.sync_mouse_mode()
+
+    @classmethod
+    def load_player_sprites(cls) -> tuple[tuple[pygame.Surface, ...], pygame.Surface]:
+        if cls._player_body_sprite_cache is None:
+            # A single orthographic hull keeps the dorsal turret silhouette and
+            # mount point consistent in every direction.  Rotate it with aiming
+            # instead of switching between perspective-painted hull variants.
+            top_down = pygame.image.load(
+                asset_path("assets/player/falcon_body_00.png")
+            ).convert_alpha()
+            cls._player_body_sprite_cache = tuple(
+                pygame.transform.rotate(top_down, -PLAYER_BODY_STEP_DEGREES * step)
+                for step in range(round(360 / PLAYER_BODY_STEP_DEGREES))
+            )
+        if cls._player_gun_sprite_cache is None:
+            cls._player_gun_sprite_cache = pygame.image.load(
+                asset_path("assets/player/falcon_gun.png")
+            ).convert_alpha()
+        return cls._player_body_sprite_cache, cls._player_gun_sprite_cache
+
+    @classmethod
+    def load_normal_enemy_sprites(cls) -> tuple[tuple[pygame.Surface, ...], ...]:
+        """Load native pixel frames once and cache directional sprites."""
+        if cls._normal_enemy_sprite_cache is not None:
+            return cls._normal_enemy_sprite_cache
+
+        animation_frames: list[tuple[pygame.Surface, ...]] = []
+        angle_step = 360.0 / NORMAL_ENEMY_DIRECTION_COUNT
+        for frame_index in range(NORMAL_ENEMY_FRAME_COUNT):
+            source = pygame.image.load(
+                asset_path(f"assets/enemies/pulse_sac/pulse_sac_{frame_index:02}.png")
+            ).convert_alpha()
+            scaled = pygame.transform.scale(
+                source,
+                (NORMAL_ENEMY_SPRITE_SIZE, NORMAL_ENEMY_SPRITE_SIZE),
+            )
+            animation_frames.append(
+                tuple(
+                    pygame.transform.rotate(scaled, direction_index * angle_step)
+                    for direction_index in range(NORMAL_ENEMY_DIRECTION_COUNT)
+                )
+            )
+        cls._normal_enemy_sprite_cache = tuple(animation_frames)
+        return cls._normal_enemy_sprite_cache
+
+    @classmethod
+    def load_elite_sprites(cls) -> dict[str, tuple[pygame.Surface, ...]]:
+        if cls._elite_sprite_cache is not None:
+            return cls._elite_sprite_cache
+        sprites: dict[str, tuple[pygame.Surface, ...]] = {}
+        for kind in ELITE_KINDS:
+            frames = []
+            for frame_index in range(4):
+                source = pygame.image.load(
+                    asset_path(f"assets/enemies/elites/{kind}/{kind}_{frame_index:02}.png")
+                ).convert_alpha()
+                frames.append(
+                    pygame.transform.scale(source, (ELITE_SPRITE_SIZE, ELITE_SPRITE_SIZE))
+                )
+            sprites[kind] = tuple(frames)
+        cls._elite_sprite_cache = sprites
+        return cls._elite_sprite_cache
+
+    @classmethod
+    def load_boss_sprites(cls) -> dict[str, tuple[pygame.Surface, ...]]:
+        if cls._boss_sprite_cache is not None:
+            return cls._boss_sprite_cache
+        sprites: dict[str, tuple[pygame.Surface, ...]] = {}
+        for kind, size in BOSS_SPRITE_SIZES.items():
+            frames = []
+            for frame_index in range(4):
+                source = pygame.image.load(
+                    asset_path(f"assets/bosses/{kind}/{kind}_{frame_index:02}.png")
+                ).convert_alpha()
+                frames.append(pygame.transform.scale(source, (size, size)))
+            sprites[kind] = tuple(frames)
+        cls._boss_sprite_cache = sprites
+        return cls._boss_sprite_cache
+
+    @classmethod
+    def load_blood_stain_sprites(cls) -> tuple[pygame.Surface, ...]:
+        if cls._blood_stain_sprite_cache is not None:
+            return cls._blood_stain_sprite_cache
+        sprites: list[pygame.Surface] = []
+        for variant in range(BLOOD_STAIN_VARIANT_COUNT):
+            source = pygame.image.load(
+                asset_path(f"assets/effects/blood_splats/blood_splats_{variant:02}.png")
+            ).convert_alpha()
+            base = pygame.transform.scale(source, (128, 128))
+            sprites.extend(
+                pygame.transform.rotate(base, rotation * 360.0 / BLOOD_STAIN_ROTATION_COUNT)
+                for rotation in range(BLOOD_STAIN_ROTATION_COUNT)
+            )
+        cls._blood_stain_sprite_cache = tuple(sprites)
+        return cls._blood_stain_sprite_cache
 
     def initialize_audio(self) -> None:
         try:
@@ -717,6 +884,18 @@ class Game:
             self.mouse_sensitivity = max(
                 0.1, min(5.0, float(data.get("mouse_sensitivity", self.mouse_sensitivity)))
             )
+            player_center = data.get("player_center_offset")
+            gun_center = data.get("gun_center_offset")
+            if isinstance(player_center, list) and len(player_center) == 2:
+                self.player_center_offset.update(
+                    max(-32.0, min(32.0, float(player_center[0]))),
+                    max(-32.0, min(32.0, float(player_center[1]))),
+                )
+            if isinstance(gun_center, list) and len(gun_center) == 2:
+                self.gun_center_offset.update(
+                    max(-32.0, min(32.0, float(gun_center[0]))),
+                    max(-32.0, min(32.0, float(gun_center[1]))),
+                )
             crosshair = data.get("crosshair_preset")
             if isinstance(crosshair, str) and any(
                 preset["key"] == crosshair for preset in CROSSHAIR_PRESETS
@@ -749,6 +928,8 @@ class Game:
             "sfx_volume": self.sfx_volume,
             "effect_volumes": dict(self.effect_volumes),
             "mouse_sensitivity": self.mouse_sensitivity,
+            "player_center_offset": list(self.player_center_offset),
+            "gun_center_offset": list(self.gun_center_offset),
             "crosshair_preset": self.crosshair_preset,
             "shake_intensity": self.shake_intensity,
             "glow_brightness": self.glow_brightness,
@@ -893,7 +1074,8 @@ class Game:
     ) -> None:
         self.mode = Mode.PLAYING
         self.player = pygame.Vector2(WIDTH / 2, HEIGHT - 90)
-        self.player_radius = 22
+        self.player_radius = 22.5
+        self.player_body_heading = 0.0
         self.population_basis = self.starting_population_value()
         self.population = (
             self.population_basis
@@ -1497,6 +1679,118 @@ class Game:
         else:
             self.sync_mouse_mode()
 
+    def toggle_sprite_calibration(self) -> None:
+        self.sprite_calibration_open = not self.sprite_calibration_open
+        self.sprite_calibration_editing = None
+        self.sprite_calibration_input = ""
+        if self.sprite_calibration_open:
+            self._disable_relative_mouse()
+            pygame.mouse.set_visible(True)
+        else:
+            self.sync_mouse_mode()
+
+    @staticmethod
+    def sprite_calibration_specs() -> tuple[tuple[str, str, float, float, float], ...]:
+        return (
+            ("player_center_x", "机体中心 X", -32.0, 32.0, 1.0),
+            ("player_center_y", "机体中心 Y", -32.0, 32.0, 1.0),
+            ("gun_center_x", "枪管中心 X", -32.0, 32.0, 1.0),
+            ("gun_center_y", "枪管中心 Y", -32.0, 32.0, 1.0),
+        )
+
+    def sprite_calibration_value(self, key: str) -> float:
+        values = {
+            "player_center_x": self.player_center_offset.x,
+            "player_center_y": self.player_center_offset.y,
+            "gun_center_x": self.gun_center_offset.x,
+            "gun_center_y": self.gun_center_offset.y,
+        }
+        return values[key]
+
+    def set_sprite_calibration_value(self, key: str, value: float) -> None:
+        if key == "player_center_x":
+            self.player_center_offset.x = value
+        elif key == "player_center_y":
+            self.player_center_offset.y = value
+        elif key == "gun_center_x":
+            self.gun_center_offset.x = value
+        elif key == "gun_center_y":
+            self.gun_center_offset.y = value
+
+    @staticmethod
+    def sprite_calibration_panel_rect() -> pygame.Rect:
+        return pygame.Rect(18, 92, 420, 440)
+
+    @staticmethod
+    def sprite_calibration_value_rect(index: int) -> pygame.Rect:
+        return pygame.Rect(202, 190 + index * 58, 116, 40)
+
+    @staticmethod
+    def sprite_calibration_button_rect(index: int, direction: int) -> pygame.Rect:
+        return pygame.Rect(330 if direction < 0 else 378, 190 + index * 58, 40, 40)
+
+    @staticmethod
+    def sprite_calibration_reset_rect() -> pygame.Rect:
+        return pygame.Rect(38, 468, 360, 42)
+
+    def commit_sprite_calibration_edit(self) -> None:
+        if self.sprite_calibration_editing is None:
+            return
+        key = self.sprite_calibration_editing
+        _, _, minimum, maximum, _ = next(
+            spec for spec in self.sprite_calibration_specs() if spec[0] == key
+        )
+        try:
+            value = float(self.sprite_calibration_input.strip())
+        except ValueError:
+            value = self.sprite_calibration_value(key)
+        self.set_sprite_calibration_value(key, max(minimum, min(maximum, value)))
+        self.sprite_calibration_editing = None
+        self.sprite_calibration_input = ""
+
+    def handle_sprite_calibration_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_F2):
+                self.toggle_sprite_calibration()
+                return
+            if self.sprite_calibration_editing is None:
+                return
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.commit_sprite_calibration_edit()
+            elif event.key == pygame.K_BACKSPACE:
+                self.sprite_calibration_input = self.sprite_calibration_input[:-1]
+            elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                if not self.sprite_calibration_input:
+                    self.sprite_calibration_input = "-"
+            else:
+                char = self._digit_key_char(event.key)
+                if char is not None and not (char == "." and "." in self.sprite_calibration_input):
+                    self.sprite_calibration_input += char
+            return
+
+        if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
+            return
+        specs = self.sprite_calibration_specs()
+        value_rects = [self.sprite_calibration_value_rect(index) for index in range(len(specs))]
+        if self.sprite_calibration_editing is not None and not any(
+            rect.collidepoint(event.pos) for rect in value_rects
+        ):
+            self.commit_sprite_calibration_edit()
+        for index, spec in enumerate(specs):
+            key, _, minimum, maximum, step = spec
+            if self.sprite_calibration_value_rect(index).collidepoint(event.pos):
+                self.sprite_calibration_editing = key
+                self.sprite_calibration_input = f"{self.sprite_calibration_value(key):g}"
+                return
+            for direction in (-1, 1):
+                if self.sprite_calibration_button_rect(index, direction).collidepoint(event.pos):
+                    value = self.sprite_calibration_value(key) + direction * step
+                    self.set_sprite_calibration_value(key, max(minimum, min(maximum, value)))
+                    return
+        if self.sprite_calibration_reset_rect().collidepoint(event.pos):
+            self.player_center_offset.update()
+            self.gun_center_offset.update()
+
     def dev_field_specs(self) -> tuple[tuple[str, str, bool, float, float, float, str], ...]:
         return (
             ("gold", "金币", True, 0, 999_999_999, 100, "int"),
@@ -1735,6 +2029,45 @@ class Game:
             f"理论DPS {format_number(self.current_dps())}"
         )
         self.blit_text(readout, (panel.x + 40, panel.bottom - 46), CYAN, self.font_small)
+
+    def draw_sprite_calibration_panel(self) -> None:
+        panel = self.sprite_calibration_panel_rect()
+        self.draw_ui_panel(panel, fill=PANEL, rim=CYAN, radius=8, glass=True)
+        self.draw_neon_line((panel.x + 14, panel.y + 1), (panel.right - 14, panel.y + 1), CYAN, 2, 10)
+        self.blit_text("玩家挂点校准", (panel.x + 20, panel.y + 20), WHITE, self.font)
+        self.blit_text("F2 / Esc 关闭 · 数值单位：像素", (panel.x + 20, panel.y + 54), MUTED, self.font_tiny)
+        self.blit_text("枪管坐标跟随机体旋转", (panel.x + 20, panel.y + 78), YELLOW, self.font_tiny)
+
+        for index, spec in enumerate(self.sprite_calibration_specs()):
+            key, label, _, _, _ = spec
+            value_rect = self.sprite_calibration_value_rect(index)
+            self.blit_text(label, (panel.x + 20, value_rect.y + 10), WHITE, self.font_small)
+            self.draw_ui_panel(value_rect, fill=PANEL_RAISED, rim=YELLOW if self.sprite_calibration_editing == key else GRID, radius=5)
+            value = self.sprite_calibration_input if self.sprite_calibration_editing == key else f"{self.sprite_calibration_value(key):.0f}"
+            rendered = self.font_numeric.render(value, True, WHITE)
+            self.screen.blit(rendered, rendered.get_rect(center=value_rect.center))
+            for direction, symbol in ((-1, "−"), (1, "+")):
+                button = self.sprite_calibration_button_rect(index, direction)
+                self.draw_ui_panel(button, fill=PANEL_RAISED, rim=CYAN, radius=5)
+                glyph = self.font.render(symbol, True, CYAN)
+                self.screen.blit(glyph, glyph.get_rect(center=button.center))
+
+        reset = self.sprite_calibration_reset_rect()
+        self.draw_ui_panel(reset, fill=(22, 31, 52), rim=PURPLE, radius=5)
+        label = self.font_small.render("重置全部偏移", True, WHITE)
+        self.screen.blit(label, label.get_rect(center=reset.center))
+
+    def draw_sprite_calibration_guides(self) -> None:
+        markers = (
+            (self.player, YELLOW),
+            (self.player_art_position(), CYAN),
+            (self.gun_mount_position(), MAGENTA),
+        )
+        for center, color in markers:
+            x, y = round(center.x), round(center.y)
+            pygame.draw.line(self.screen, color, (x - 9, y), (x + 9, y), 1)
+            pygame.draw.line(self.screen, color, (x, y - 9), (x, y + 9), 1)
+            pygame.draw.circle(self.screen, color, (x, y), 3, 1)
 
     def update_cursor_effects(self, dt: float, position: pygame.Vector2) -> None:
         self.cursor_time += dt
@@ -2067,17 +2400,40 @@ class Game:
         except OSError as error:
             self.balance_log_error = str(error)
 
-    def spawn_enemy(self, elite: bool = False) -> None:
+    def spawn_enemy(self, elite: bool = False, elite_kind: str | None = None) -> None:
         target = TARGET_ELITE if elite else TARGET_NORMAL
         if elite:
-            speed, radius = 88 * (1 + 0.04 * (self.world - 1)), 27
+            if elite_kind is not None and elite_kind not in ELITE_KINDS:
+                raise ValueError(f"unknown elite kind: {elite_kind}")
+            elite_kind = elite_kind or self.rng.choice(ELITE_KINDS)
+            base_speed = {"guardian": 72.0, "archon": 66.0, "hunter": 88.0}[elite_kind]
+            speed, radius = base_speed * (1 + 0.04 * (self.world - 1)), 23
         else:
             speed, radius = self.rng.uniform(60, 74) * (1 + 0.04 * (self.world - 1)), 16
         hp = self.current_dps() if elite else world_target_health(self.world, "normal")
         speed = max(0.0, self.apply_stat(speed, "move_speed", target))
         hp = max(1.0, self.apply_stat(hp, "health", target))
+        shields = (
+            [EliteShield(angle, hp * 0.18, hp * 0.18) for angle in (0.0, 120.0, 240.0)]
+            if elite_kind == "guardian"
+            else []
+        )
+        state = "cooldown" if elite_kind == "hunter" else "approach"
+        state_timer = self.rng.uniform(0.8, 1.2) if elite_kind == "hunter" else 0.0
         self.enemies.append(
-            Enemy(pygame.Vector2(self.rng.randint(35, WIDTH - 35), -30), hp, hp, speed, radius, elite)
+            Enemy(
+                pygame.Vector2(self.rng.randint(35, WIDTH - 35), -30),
+                hp,
+                hp,
+                speed,
+                radius,
+                elite=elite,
+                elite_kind=elite_kind,
+                animation_time=self.rng.random() / NORMAL_ENEMY_ANIMATION_FPS,
+                shields=shields,
+                elite_state=state,
+                state_timer=state_timer,
+            )
         )
 
     def spawn_number_gate(self) -> None:
@@ -2194,6 +2550,10 @@ class Game:
             self.handle_dev_event(event)
             return
 
+        if self.sprite_calibration_open:
+            self.handle_sprite_calibration_event(event)
+            return
+
         if self.settlement is not None:
             if self.settlement.phase == "button":
                 if event.type == pygame.KEYDOWN and event.key in (
@@ -2304,6 +2664,9 @@ class Game:
         if event.key == pygame.K_F1:
             self.toggle_dev_panel()
             return
+        if event.key == pygame.K_F2:
+            self.toggle_sprite_calibration()
+            return
         if event.key == pygame.K_ESCAPE:
             if self.mode in (Mode.TUTORIAL, Mode.SETTINGS):
                 self.mode = Mode.MAIN_MENU
@@ -2402,7 +2765,7 @@ class Game:
             self.aim_position.y = max(0, min(HEIGHT, self.aim_position.y))
 
         self.fire_timer -= dt
-        firing = pygame.mouse.get_pressed()[0]
+        firing = pygame.mouse.get_pressed()[0] and not self.sprite_calibration_open
         ramp_limits = [
             abs(float(effect.parameters.get("cap", 0.0)))
             / max(0.001, abs(float(effect.parameters.get("value_per_second", 0.0))))
@@ -2577,6 +2940,39 @@ class Game:
         bullet.position = previous.copy()
         bullet.bounces -= 1
 
+    @staticmethod
+    def colliding_guardian_shield(enemy: Enemy, bullet: Bullet) -> EliteShield | None:
+        if enemy.elite_kind != "guardian":
+            return None
+        for shield in enemy.shields:
+            if shield.hp <= 0 or id(shield) in bullet.hit_ids:
+                continue
+            if bullet.position.distance_to(shield.world_position(enemy.position)) <= shield.radius + bullet.radius:
+                return shield
+        return None
+
+    def elite_mechanism_damage_multiplier(self, enemy: Enemy) -> float:
+        if enemy.elite_kind == "archon":
+            living_ids = {id(candidate) for candidate in self.enemies if candidate.hp > 0}
+            link_count = sum(target_id in living_ids for target_id in enemy.linked_target_ids)
+            return max(0.70, 1.0 - 0.10 * link_count)
+        if enemy.elite_kind == "hunter" and enemy.elite_state == "overheat":
+            return 1.50
+        if enemy.elite_kind == "guardian" and enemy.vulnerable_timer > 0:
+            return 1.35
+        return 1.0
+
+    def damage_guardian_shield(self, bullet: Bullet, enemy: Enemy, shield: EliteShield) -> bool:
+        damage = bullet.damage * self.apply_stat(1.0, "damage_taken", TARGET_ELITE)
+        shield.hp -= damage
+        self.total_damage_dealt += damage
+        self.play_effect_sound(self.enemy_hit_sound, "enemy_hit")
+        self.apply_on_hit_effects(TARGET_ELITE, shield.world_position(enemy.position), damage, shield)
+        self.dispatch_effect_event("on_hit", TARGET_ELITE)
+        if shield.hp <= 0 and not any(module.hp > 0 for module in enemy.shields):
+            enemy.vulnerable_timer = max(enemy.vulnerable_timer, 1.5)
+        return self.apply_hit(bullet, shield)
+
     def update_bullets(self, dt: float) -> None:
         for bullet in self.bullets:
             bullet.update(dt)
@@ -2608,9 +3004,15 @@ class Game:
                 for enemy in self.enemies:
                     if id(enemy) in bullet.hit_ids:
                         continue
+                    shield = self.colliding_guardian_shield(enemy, bullet)
+                    if shield is not None:
+                        remove = self.damage_guardian_shield(bullet, enemy, shield)
+                        break
                     if bullet.position.distance_to(enemy.position) <= enemy.radius + bullet.radius:
                         target = TARGET_ELITE if enemy.elite else TARGET_NORMAL
                         damage = bullet.damage * self.apply_stat(1.0, "damage_taken", target)
+                        if enemy.elite:
+                            damage *= self.elite_mechanism_damage_multiplier(enemy)
                         enemy.hp -= damage
                         self.total_damage_dealt += damage
                         self.play_effect_sound(self.enemy_hit_sound, "enemy_hit")
@@ -2683,14 +3085,20 @@ class Game:
                 if enemy is source or not effect.targets.includes(target):
                     continue
                 if global_effect or enemy.position.distance_to(center) <= radius:
-                    enemy.hp -= splash_damage
-                    self.total_damage_dealt += splash_damage
+                    applied_damage = splash_damage
+                    if enemy.elite:
+                        applied_damage *= self.elite_mechanism_damage_multiplier(enemy)
+                    enemy.hp -= applied_damage
+                    self.total_damage_dealt += applied_damage
 
     def splash(self, center: pygame.Vector2, damage: float, source: object, radius: float = 95.0) -> None:
         for enemy in self.enemies:
             if enemy is not source and enemy.position.distance_to(center) <= radius:
-                enemy.hp -= damage
-                self.total_damage_dealt += damage
+                applied_damage = damage
+                if enemy.elite:
+                    applied_damage *= self.elite_mechanism_damage_multiplier(enemy)
+                enemy.hp -= applied_damage
+                self.total_damage_dealt += applied_damage
 
     def register_kill(
         self,
@@ -2702,7 +3110,7 @@ class Game:
         self.rapid_reload_kills += 1
         self.play_kill_sound()
         if position is not None:
-            self.spawn_death_effects(position, radius, 1.75 if elite else 1.0)
+            self.spawn_death_effects(position, radius, 1.75 if elite else 1.0, danger=elite)
         target = TARGET_ELITE if elite else TARGET_NORMAL
         self.dispatch_effect_event("on_enemy_kill", target)
         if elite:
@@ -2736,16 +3144,89 @@ class Game:
         }[target]
         return max(0.0, min(1.0, self.apply_stat(0.0, stat, target)))
 
+    def refresh_archon_links(self) -> set[int]:
+        linked: set[int] = set()
+        normal_enemies = [enemy for enemy in self.enemies if not enemy.elite and enemy.hp > 0]
+        for archon in self.enemies:
+            if archon.hp <= 0 or archon.elite_kind != "archon":
+                continue
+            nearby = sorted(
+                (
+                    enemy
+                    for enemy in normal_enemies
+                    if enemy.position.distance_to(archon.position) <= 190.0
+                ),
+                key=lambda enemy: enemy.position.distance_squared_to(archon.position),
+            )[:3]
+            archon.linked_target_ids = {id(enemy) for enemy in nearby}
+            linked.update(archon.linked_target_ids)
+        return linked
+
+    def update_hunter(self, enemy: Enemy, dt: float) -> None:
+        if enemy.disabled_timer > 0:
+            enemy.disabled_timer = max(0.0, enemy.disabled_timer - dt)
+            enemy.animation_time += dt
+            return
+        enemy.state_timer = max(0.0, enemy.state_timer - dt)
+        low_health = enemy.hp <= enemy.max_hp * 0.35
+        if enemy.elite_state == "cooldown":
+            enemy.update(dt, self.player, 0.72)
+            if enemy.position.y > 70 and enemy.state_timer <= 0:
+                enemy.elite_state = "lock"
+                enemy.state_timer = 0.52 if low_health else 0.78
+                enemy.charge_direction = normalized(self.player - enemy.position)
+        elif enemy.elite_state == "lock":
+            enemy.animation_time += dt
+            if enemy.charge_direction.length_squared():
+                enemy.heading_degrees = math.degrees(
+                    math.atan2(-enemy.charge_direction.x, -enemy.charge_direction.y)
+                )
+            if enemy.state_timer <= 0:
+                enemy.elite_state = "charge"
+                enemy.state_timer = 0.48
+        elif enemy.elite_state == "charge":
+            enemy.animation_time += dt
+            enemy.position += enemy.charge_direction * (390.0 + self.world * 12.0) * dt
+            if enemy.state_timer <= 0:
+                enemy.elite_state = "overheat"
+                enemy.state_timer = 0.90
+        else:
+            enemy.animation_time += dt
+            if enemy.state_timer <= 0:
+                enemy.elite_state = "cooldown"
+                enemy.state_timer = 0.70 if low_health else 1.45
+
+    def handle_elite_death(self, enemy: Enemy) -> None:
+        if enemy.elite_kind == "archon":
+            for candidate in self.enemies:
+                if not candidate.elite and candidate.hp > 0 and candidate.position.distance_to(enemy.position) <= 190.0:
+                    candidate.disabled_timer = max(candidate.disabled_timer, 1.25)
+        elif enemy.elite_kind == "hunter":
+            for candidate in self.enemies:
+                if not candidate.elite and candidate.hp > 0 and candidate.position.distance_to(enemy.position) <= 120.0:
+                    candidate.hp = 0
+
     def update_enemies(self, dt: float) -> None:
+        linked_enemy_ids = self.refresh_archon_links()
         for enemy in self.enemies[:]:
             if enemy.hp <= 0:
                 self.enemies.remove(enemy)
+                if enemy.elite:
+                    self.handle_elite_death(enemy)
                 self.register_kill(enemy.elite, enemy.position, enemy.radius)
                 if enemy.elite:
                     self.population += round(self.apply_stat(4.0, "elite_kill_population", TARGET_PLAYER))
                 continue
-            enemy.update(dt, self.player)
-            if enemy.elite and enemy.position.y > 50:
+            enemy.vulnerable_timer = max(0.0, enemy.vulnerable_timer - dt)
+            if enemy.elite_kind == "guardian":
+                for shield in enemy.shields:
+                    shield.angle = (shield.angle + 76.0 * dt) % 360.0
+            if enemy.elite_kind == "hunter":
+                self.update_hunter(enemy, dt)
+            else:
+                speed_multiplier = 1.18 if id(enemy) in linked_enemy_ids else 1.0
+                enemy.update(dt, self.player, speed_multiplier)
+            if enemy.elite_kind in {"guardian", "archon"} and enemy.position.y > 50:
                 enemy.shoot_timer -= dt
                 if enemy.shoot_timer <= 0:
                     direction = normalized(self.player - enemy.position)
@@ -2753,7 +3234,8 @@ class Game:
                     self.enemy_bullets.append(
                         EnemyBullet(enemy.position.copy(), direction * speed, population_loss_ratio=0.03)
                     )
-                    enemy.shoot_timer = self.rng.uniform(2.8, 4.0)
+                    interval = (2.8, 3.6) if enemy.elite_kind == "guardian" else (3.4, 4.3)
+                    enemy.shoot_timer = self.rng.uniform(*interval)
             if enemy.position.distance_to(self.player) <= enemy.radius + self.player_radius:
                 loss_ratio = 0.12 if enemy.elite else 0.02
                 target = TARGET_ELITE if enemy.elite else TARGET_NORMAL
@@ -2763,7 +3245,8 @@ class Game:
                 else:
                     loss = self.lose_population_ratio(loss_ratio)
                 self.enemies.remove(enemy)
-                self.message = f"{'精英' if enemy.elite else '怪物'}突破：人口 -{loss}（{loss_ratio:.0%}）"
+                enemy_name = ELITE_NAMES.get(enemy.elite_kind, "精英") if enemy.elite else "怪物"
+                self.message = f"{enemy_name}突破：人口 -{loss}（{loss_ratio:.0%}）"
                 self.message_timer = 1.5
 
     def update_enemy_bullets(self, dt: float) -> None:
@@ -3249,6 +3732,7 @@ class Game:
         position: pygame.Vector2,
         radius: int,
         impact: float,
+        danger: bool | None = None,
     ) -> None:
         self.kill_combo = self.kill_combo + 1 if self.kill_combo_timer > 0 else 1
         self.kill_combo_timer = 0.28
@@ -3278,8 +3762,27 @@ class Game:
             for _ in range(3 + min(6, radius // 9))
         )
         stain_life = self.visual_rng.uniform(5.0, 7.0)
+        is_danger = impact > 1.1 if danger is None else danger
+        effect_color = RED
+        source_sprite = self.load_blood_stain_sprites()[
+            self.visual_rng.randrange(BLOOD_STAIN_VARIANT_COUNT * BLOOD_STAIN_ROTATION_COUNT)
+        ]
+        blood_sprite = source_sprite.copy()
+        size_scale = self.visual_rng.uniform(0.55, 0.90) * max(1.0, radius / 16.0)
+        blood_sprite = pygame.transform.scale(
+            blood_sprite,
+            (max(16, round(128 * size_scale)), max(16, round(128 * size_scale))),
+        )
         self.blood_stains.append(
-            BloodStain(position.copy(), tuple(points), droplets, stain_life, stain_life)
+            BloodStain(
+                position.copy(),
+                tuple(points),
+                droplets,
+                stain_life,
+                stain_life,
+                effect_color,
+                blood_sprite,
+            )
         )
         if len(self.blood_stains) > BLOOD_STAIN_CAP:
             del self.blood_stains[:-BLOOD_STAIN_CAP]
@@ -3296,6 +3799,7 @@ class Game:
                     life,
                     life,
                     self.visual_rng.uniform(1.2, 3.2),
+                    (255, 132, 148),
                 )
             )
         if len(self.death_particles) > DEATH_PARTICLE_CAP:
@@ -3727,32 +4231,40 @@ class Game:
         for stain in self.blood_stains:
             fade = min(1.0, stain.life / 1.5)
             alpha = round(185 * fade)
+            if stain.sprite is not None:
+                stain.sprite.set_alpha(round(255 * min(1.0, stain.life / stain.max_life) ** 0.72))
+                self.screen.blit(stain.sprite, stain.sprite.get_rect(center=stain.position))
+                continue
+            base = stain.color
+            dark = tuple(round(channel * 0.42) for channel in base)
+            middle = tuple(min(255, round(channel * 1.08)) for channel in base)
+            bright = tuple(min(255, round(channel * 1.34 + 12)) for channel in base)
             points = [stain.position + point for point in stain.points]
-            pygame.draw.polygon(layer, (116, 12, 25, alpha), points)
+            pygame.draw.polygon(layer, (*dark, alpha), points)
             outer_points = [stain.position + point * 1.18 for point in stain.points]
             middle_points = [stain.position + point * 1.10 for point in stain.points]
-            pygame.draw.polygon(layer, (186, 14, 32, round(alpha * 0.14)), outer_points, 6)
-            pygame.draw.polygon(layer, (218, 22, 40, round(alpha * 0.24)), middle_points, 4)
-            pygame.draw.polygon(layer, (245, 38, 54, round(alpha * 0.63)), points, 4)
+            pygame.draw.polygon(layer, (*base, round(alpha * 0.14)), outer_points, 6)
+            pygame.draw.polygon(layer, (*middle, round(alpha * 0.24)), middle_points, 4)
+            pygame.draw.polygon(layer, (*bright, round(alpha * 0.63)), points, 4)
             for offset, drop_radius in stain.droplets:
                 center = stain.position + offset
                 radius = max(1, round(drop_radius))
                 pygame.draw.circle(
                     layer,
-                    (128, 10, 22, round(alpha * 0.90)),
+                    (*dark, round(alpha * 0.90)),
                     center,
                     radius,
                 )
                 pygame.draw.circle(
                     layer,
-                    (190, 16, 34, round(alpha * 0.18)),
+                    (*base, round(alpha * 0.18)),
                     center,
                     radius + 2,
                     2,
                 )
                 pygame.draw.circle(
                     layer,
-                    (232, 30, 46, round(alpha * 0.38)),
+                    (*bright, round(alpha * 0.38)),
                     center,
                     radius,
                     1,
@@ -3768,7 +4280,7 @@ class Game:
             alpha = round(255 * max(0.0, particle.life / particle.max_life))
             pygame.draw.circle(
                 layer,
-                (245, 248, 255, alpha),
+                (*particle.color, alpha),
                 particle.position,
                 max(1, round(particle.radius)),
             )
@@ -3849,6 +4361,8 @@ class Game:
             self.draw_bullets()
             self.draw_enemy_bullets()
             self.draw_player()
+            if self.sprite_calibration_open:
+                self.draw_sprite_calibration_guides()
             self.apply_glow()
             if self.mode == Mode.PLAYING and (
                 self.settlement is None or self.settlement.phase == "slowmo"
@@ -3873,6 +4387,8 @@ class Game:
                 )
         if self.dev_panel_open:
             self.draw_dev_panel()
+        elif self.sprite_calibration_open:
+            self.draw_sprite_calibration_panel()
         self.apply_screen_shake()
         pygame.display.flip()
 
@@ -4418,14 +4934,78 @@ class Game:
         self.blit_text("机动甲板 / MANEUVER DECK", (18, PLAY_TOP + 12), MUTED, self.font_tiny)
         self.blit_text("LIVE FIRESPACE", (WIDTH - 154, 76), MAGENTA, self.font_tiny)
 
+    def gun_mount_position(self) -> pygame.Vector2:
+        """Return the top-turret pivot in the aircraft's local coordinate space."""
+        return self.player + self.gun_center_offset.rotate(-self.player_body_heading)
+
+    def player_art_position(self) -> pygame.Vector2:
+        """Keep the baked hull pivot and logical player center coincident."""
+        return self.player + self.player_center_offset.rotate(-self.player_body_heading)
+
+    def escort_ring_counts(self) -> tuple[int, int, int]:
+        population = max(0, self.population)
+        counts: list[int] = []
+        lower_bound = 0
+        for upper_bound, _, capacity in ESCORT_RING_SPECS:
+            progress = (population - lower_bound) / max(1, upper_bound - lower_bound)
+            counts.append(max(0, min(capacity, math.ceil(progress * capacity))))
+            lower_bound = upper_bound
+        return tuple(counts)
+
+    def draw_escort_turret(self, position: pygame.Vector2, direction: pygame.Vector2) -> None:
+        forward = normalized(direction)
+        if not forward.length_squared():
+            forward = pygame.Vector2(1, 0)
+        side = pygame.Vector2(-forward.y, forward.x)
+        nose = position + forward * 7
+        shoulder = position + forward * 2
+        rear = position - forward * 5
+        hull = (
+            nose,
+            rear + side * 4,
+            rear - side * 4,
+        )
+        pygame.draw.polygon(self.screen, (18, 35, 57), hull)
+        pygame.draw.polygon(self.screen, CYAN, hull, 1)
+        pygame.draw.line(self.screen, WHITE, shoulder, nose, 2)
+        pygame.draw.circle(self.screen, (42, 137, 172), position, 3)
+        pygame.draw.circle(self.screen, WHITE, position, 1)
+
     def draw_player(self) -> None:
-        pygame.draw.circle(self.screen, CYAN, self.player, self.player_radius)
         aim = self.aim_direction()
-        pygame.draw.line(self.screen, WHITE, self.player, self.player + aim * 34, 6)
-        visible = min(12, max(1, math.ceil(self.population / 5)))
-        for index in range(visible):
-            angle = index * math.tau / visible
-            pygame.draw.circle(self.screen, (42, 137, 172), self.player + pygame.Vector2(math.cos(angle), math.sin(angle)) * 36, 5)
+        aim_heading = math.degrees(math.atan2(aim.y, aim.x)) % 360.0
+        heading_delta = (aim_heading - self.player_body_heading + 180.0) % 360.0 - 180.0
+        if abs(heading_delta) > PLAYER_BODY_TURN_THRESHOLD:
+            self.player_body_heading = (
+                self.player_body_heading
+                + math.copysign(PLAYER_BODY_STEP_DEGREES, heading_delta)
+            ) % 360.0
+        body_sprites, gun_sprite = self.load_player_sprites()
+        body_step = round(self.player_body_heading / PLAYER_BODY_STEP_DEGREES) % len(body_sprites)
+        body_sprite = body_sprites[body_step]
+        self.screen.blit(
+            body_sprite,
+            body_sprite.get_rect(center=self.player_art_position()),
+        )
+        rotated_gun = pygame.transform.rotate(gun_sprite, -aim_heading)
+        self.screen.blit(
+            rotated_gun,
+            rotated_gun.get_rect(center=self.gun_mount_position()),
+        )
+        ring_counts = self.escort_ring_counts()
+        for ring_index, ((_, radius, _), visible) in enumerate(
+            zip(ESCORT_RING_SPECS, ring_counts)
+        ):
+            if visible <= 0:
+                continue
+            phase = ring_index * math.pi / max(1, visible)
+            for index in range(visible):
+                angle = phase + index * math.tau / visible
+                escort = self.player + pygame.Vector2(
+                    math.cos(angle) * radius,
+                    math.sin(angle) * radius,
+                )
+                self.draw_escort_turret(escort, aim)
 
     def draw_bullets(self) -> None:
         for bullet in self.bullets:
@@ -4436,13 +5016,82 @@ class Game:
             pygame.draw.circle(self.screen, RED, bullet.position, bullet.radius)
             pygame.draw.circle(self.screen, ORANGE, bullet.position, bullet.radius, 2)
 
+    def draw_guardian_shields(self, enemy: Enemy) -> None:
+        for shield in enemy.shields:
+            if shield.hp <= 0:
+                continue
+            center = shield.world_position(enemy.position)
+            radial = normalized(center - enemy.position)
+            tangent = pygame.Vector2(-radial.y, radial.x)
+            points = (
+                center + tangent * 11 - radial * 5,
+                center + tangent * 11 + radial * 5,
+                center - tangent * 11 + radial * 5,
+                center - tangent * 11 - radial * 5,
+            )
+            pygame.draw.polygon(self.screen, (225, 238, 247), points)
+            pygame.draw.polygon(self.screen, CYAN, points, 2)
+            ratio = max(0.0, min(1.0, shield.hp / shield.max_hp))
+            pygame.draw.line(
+                self.screen,
+                (26, 46, 65),
+                center - tangent * 7,
+                center + tangent * 7,
+                2,
+            )
+            pygame.draw.line(
+                self.screen,
+                CYAN,
+                center - tangent * 7,
+                center - tangent * 7 + tangent * 14 * ratio,
+                2,
+            )
+
     def draw_enemies(self) -> None:
+        enemies_by_id = {id(enemy): enemy for enemy in self.enemies}
         for enemy in self.enemies:
-            color = PURPLE if enemy.elite else GREEN
-            pygame.draw.circle(self.screen, color, enemy.position, enemy.radius)
+            if enemy.elite_kind == "archon":
+                for target_id in enemy.linked_target_ids:
+                    target = enemies_by_id.get(target_id)
+                    if target is not None and target.hp > 0:
+                        pygame.draw.line(self.screen, (29, 99, 125), enemy.position, target.position, 5)
+                        pygame.draw.line(self.screen, CYAN, enemy.position, target.position, 2)
+            elif enemy.elite_kind == "hunter" and enemy.elite_state == "lock":
+                end = enemy.position + enemy.charge_direction * 430.0
+                pygame.draw.line(self.screen, DARK_RED, enemy.position, end, 6)
+                pygame.draw.line(self.screen, RED, enemy.position, end, 2)
+                pygame.draw.circle(self.screen, WHITE, end, 5, 2)
+
+        for enemy in self.enemies:
             if enemy.elite:
-                pygame.draw.circle(self.screen, WHITE, enemy.position, enemy.radius, 3)
-                self.draw_health_bar(enemy.position, enemy.radius + 12, enemy.hp, enemy.max_hp, PURPLE, 58)
+                kind = enemy.elite_kind or "guardian"
+                if kind == "guardian":
+                    sprite = self.elite_sprites[kind][3]
+                elif kind == "archon":
+                    sprite = self.elite_sprites[kind][1 if enemy.linked_target_ids else 0]
+                else:
+                    frame = {"charge": 1, "overheat": 2}.get(enemy.elite_state, 0)
+                    sprite = self.elite_sprites[kind][frame]
+                    sprite = pygame.transform.rotate(sprite, enemy.heading_degrees - 180.0)
+                self.screen.blit(sprite, sprite.get_rect(center=enemy.position))
+                if kind == "guardian":
+                    self.draw_guardian_shields(enemy)
+                color = ELITE_COLORS[kind]
+                if enemy.position.y > 50:
+                    label = self.font_tiny.render(ELITE_NAMES[kind], True, color)
+                    self.screen.blit(label, label.get_rect(center=(enemy.position.x, enemy.position.y - 48)))
+                self.draw_health_bar(enemy.position, 45, enemy.hp, enemy.max_hp, color, 72)
+                continue
+
+            frame_index = int(enemy.animation_time * NORMAL_ENEMY_ANIMATION_FPS) % len(
+                self.normal_enemy_sprites
+            )
+            directions = self.normal_enemy_sprites[frame_index]
+            direction_index = round(
+                enemy.heading_degrees / (360.0 / len(directions))
+            ) % len(directions)
+            sprite = directions[direction_index]
+            self.screen.blit(sprite, sprite.get_rect(center=enemy.position))
 
     def draw_gates(self) -> None:
         buff_names = {"damage": "伤害门", "fire_rate": "射速门", "population": "征召门"}
@@ -4480,6 +5129,44 @@ class Game:
             elif boss.variant == "devourer":
                 base_color = PURPLE
             color = YELLOW if boss.windup_remaining is not None else base_color
+
+            # Worlds 1–8 use the authored boss sprite sets.  Keep the
+            # procedural commander/devourer silhouettes for their later-world
+            # variants so this art pass does not alter their mechanics.
+            if boss.variant == "standard":
+                sprite_frames = self.boss_sprites[boss.kind]
+                if boss.windup_remaining is not None:
+                    frame_index = 1  # telegraph / charging state
+                elif boss.phase >= 2 or boss.hp <= boss.max_hp * 0.5:
+                    frame_index = 2  # damaged / enraged state
+                else:
+                    frame_index = 0  # normal state
+                sprite = sprite_frames[frame_index]
+                self.screen.blit(sprite, sprite.get_rect(center=boss.position))
+                if boss.kind == "big":
+                    pygame.draw.circle(self.screen, DARK_RED, boss.position, round(boss.attack_range), 2)
+                sprite_size = BOSS_SPRITE_SIZES[boss.kind]
+                self.draw_health_bar(
+                    boss.position,
+                    max(boss.radius + 16, sprite_size // 2 + 12),
+                    boss.hp,
+                    boss.max_hp,
+                    color,
+                    max(boss.radius * 3, sprite_size - 8),
+                )
+                text = self.font_tiny.render(
+                    self.boss_name(boss.kind, boss.variant), True, WHITE
+                )
+                label_pos = boss.position + pygame.Vector2(0, -(sprite_size / 2 + 17))
+                self.screen.blit(text, text.get_rect(center=label_pos))
+                if boss.windup_remaining is not None:
+                    self.blit_text(f"100%斩杀 {max(0, boss.windup_remaining):.1f}", boss.position + pygame.Vector2(-62, sprite_size / 2 + 18), YELLOW, self.font_small)
+                    danger = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                    pygame.draw.circle(danger, (255, 40, 50, 45), boss.position, round(boss.attack_range))
+                    pygame.draw.circle(danger, (255, 80, 50, 180), boss.position, round(boss.attack_range), 5)
+                    self.screen.blit(danger, (0, 0))
+                continue
+
             pygame.draw.circle(self.screen, color, boss.position, boss.radius)
             pygame.draw.circle(self.screen, WHITE, boss.position, boss.radius, 3)
             if boss.variant == "commander":

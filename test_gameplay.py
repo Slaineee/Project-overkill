@@ -12,6 +12,7 @@ from cards import CARD_BY_KEY, TARGET_BOSS, TARGET_ELITE, TARGET_NORMAL, TARGET_
 from main import (
     BOSS_KILL_VOLUME_BOOST,
     CROSSHAIR_PRESETS,
+    ELITE_KINDS,
     KILL_SOUND_FADE_IN_MS,
     KILL_TAIL_DUCKING,
     PLAY_TOP,
@@ -202,6 +203,24 @@ class GameplayTests(unittest.TestCase):
         game.bullets = [Bullet(gate.position.copy(), pygame.Vector2(), 1, 1)]
         game.update_bullets(0)
         game.play_effect_sound.assert_called_with(game.gate_hit_sound, "gate_hit")
+
+    def test_normal_enemy_uses_cached_smooth_scaled_sprite_sequence(self) -> None:
+        game = Game()
+        self.assertEqual(len(game.normal_enemy_sprites), 4)
+        self.assertTrue(all(len(frame) == 16 for frame in game.normal_enemy_sprites))
+        self.assertEqual(game.normal_enemy_sprites[0][0].get_size(), (40, 40))
+        self.assertEqual(game.normal_enemy_sprites[0][0].get_at((0, 0)).a, 0)
+
+    def test_death_effect_uses_red_blood_and_danger_variant(self) -> None:
+        game = Game()
+        position = pygame.Vector2(400, 300)
+        game.spawn_death_effects(position, 16, 1.0)
+        self.assertGreater(game.blood_stains[-1].color[0], game.blood_stains[-1].color[1])
+        self.assertEqual(len(game.load_blood_stain_sprites()), 60)
+        self.assertIsNotNone(game.blood_stains[-1].sprite)
+
+        game.spawn_death_effects(position, 27, 1.75)
+        self.assertGreater(game.blood_stains[-1].color[0], game.blood_stains[-1].color[1])
 
     def test_collecting_gate_plays_midi_style_chime(self) -> None:
         game = Game()
@@ -900,7 +919,7 @@ class GameplayTests(unittest.TestCase):
     def test_elite_fires_slow_projectile(self) -> None:
         game = Game()
         game.population = 20
-        game.spawn_enemy(elite=True)
+        game.spawn_enemy(elite=True, elite_kind="guardian")
         elite = game.enemies[0]
         elite.position.update(640, 200)
         elite.shoot_timer = 0
@@ -911,6 +930,148 @@ class GameplayTests(unittest.TestCase):
         bullet.velocity.update(0, 0)
         game.update_enemy_bullets(0)
         self.assertEqual(game.population, 19)
+
+    def test_elite_spawns_randomly_across_all_three_kinds(self) -> None:
+        game = Game()
+        game.rng.seed(7)
+        for _ in range(40):
+            game.spawn_enemy(elite=True)
+        self.assertEqual({enemy.elite_kind for enemy in game.enemies}, set(ELITE_KINDS))
+
+    def test_guardian_has_three_independent_rotating_shields(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="guardian")
+        guardian = game.enemies[0]
+        self.assertEqual(len(guardian.shields), 3)
+        self.assertEqual([shield.angle for shield in guardian.shields], [0.0, 120.0, 240.0])
+        first_hp = guardian.shields[0].hp
+        guardian.shields[0].hp -= 1
+        self.assertEqual(guardian.shields[1].hp, first_hp)
+        game.update_enemies(0.5)
+        self.assertEqual([shield.angle for shield in guardian.shields], [38.0, 158.0, 278.0])
+
+    def test_guardian_shield_blocks_non_piercing_bullet(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="guardian")
+        guardian = game.enemies[0]
+        guardian.position.update(400, 260)
+        shield = guardian.shields[0]
+        core_hp = guardian.hp
+        shield_hp = shield.hp
+        bullet = Bullet(shield.world_position(guardian.position), pygame.Vector2(), 10, 10)
+        game.bullets = [bullet]
+        game.update_bullets(0)
+        self.assertNotIn(bullet, game.bullets)
+        self.assertEqual(guardian.hp, core_hp)
+        self.assertEqual(shield.hp, shield_hp - 10)
+
+    def test_piercing_bullet_passes_guardian_shield_and_can_hit_core(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="guardian")
+        guardian = game.enemies[0]
+        guardian.position.update(400, 260)
+        shield = guardian.shields[0]
+        core_hp = guardian.hp
+        bullet = Bullet(
+            shield.world_position(guardian.position),
+            pygame.Vector2(),
+            10,
+            10,
+            pierces=1,
+        )
+        game.bullets = [bullet]
+        game.update_bullets(0)
+        self.assertIn(bullet, game.bullets)
+        self.assertEqual(bullet.pierces, 0)
+        self.assertEqual(guardian.hp, core_hp)
+        bullet.position.update(guardian.position)
+        game.update_bullets(0)
+        self.assertNotIn(bullet, game.bullets)
+        self.assertEqual(guardian.hp, core_hp - 10)
+
+    def test_breaking_last_guardian_shield_opens_vulnerability_window(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="guardian")
+        guardian = game.enemies[0]
+        guardian.position.update(400, 260)
+        for shield in guardian.shields:
+            game.bullets = [
+                Bullet(
+                    shield.world_position(guardian.position),
+                    pygame.Vector2(),
+                    shield.max_hp,
+                    shield.max_hp,
+                )
+            ]
+            game.update_bullets(0)
+        self.assertFalse(any(shield.hp > 0 for shield in guardian.shields))
+        self.assertEqual(guardian.vulnerable_timer, 1.5)
+        self.assertEqual(game.elite_mechanism_damage_multiplier(guardian), 1.35)
+
+    def test_archon_links_three_minions_and_gains_damage_reduction(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="archon")
+        archon = game.enemies[0]
+        archon.position.update(500, 220)
+        for offset in (-60, 0, 60, 150):
+            game.spawn_enemy()
+            game.enemies[-1].position.update(500 + offset, 260)
+        game.refresh_archon_links()
+        self.assertEqual(len(archon.linked_target_ids), 3)
+        before = archon.hp
+        game.bullets = [Bullet(archon.position.copy(), pygame.Vector2(), 100, 100)]
+        game.update_bullets(0)
+        self.assertEqual(before - archon.hp, 70)
+
+    def test_archon_death_disables_nearby_minions(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="archon")
+        archon = game.enemies[0]
+        archon.position.update(500, 220)
+        game.spawn_enemy()
+        minion = game.enemies[-1]
+        minion.position.update(520, 240)
+        archon.hp = 0
+        game.update_enemies(0)
+        self.assertEqual(minion.disabled_timer, 1.25)
+
+    def test_hunter_cycles_into_charge_and_overheat(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="hunter")
+        hunter = game.enemies[0]
+        hunter.position.update(640, 200)
+        hunter.elite_state = "lock"
+        hunter.state_timer = 0
+        hunter.charge_direction.update(0, 1)
+        game.update_enemies(0)
+        self.assertEqual(hunter.elite_state, "charge")
+        hunter.state_timer = 0
+        game.update_enemies(0)
+        self.assertEqual(hunter.elite_state, "overheat")
+        self.assertEqual(game.elite_mechanism_damage_multiplier(hunter), 1.5)
+
+    def test_low_health_hunter_recovers_into_a_shorter_charge_cooldown(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="hunter")
+        hunter = game.enemies[0]
+        hunter.position.update(640, 200)
+        hunter.hp = hunter.max_hp * 0.30
+        hunter.elite_state = "overheat"
+        hunter.state_timer = 0
+        game.update_enemies(0)
+        self.assertEqual(hunter.elite_state, "cooldown")
+        self.assertEqual(hunter.state_timer, 0.70)
+
+    def test_hunter_death_clears_nearby_normal_enemies(self) -> None:
+        game = Game()
+        game.spawn_enemy(elite=True, elite_kind="hunter")
+        hunter = game.enemies[0]
+        hunter.position.update(500, 220)
+        game.spawn_enemy()
+        game.enemies[-1].position.update(520, 240)
+        hunter.hp = 0
+        game.update_enemies(0)
+        self.assertFalse(game.enemies)
 
     def test_bosses_fire_fan_patterns(self) -> None:
         game = Game()
