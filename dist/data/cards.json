@@ -481,7 +481,7 @@
   {
     "key": "kill_shot",
     "name": "急速装填",
-    "description": "每击杀15个普通或精英敌人，获得 +2%射速",
+    "description": "每击杀10个普通或精英敌人，获得 +2%射速",
     "rarity": "普通",
     "price": 3,
     "category": "fire_control",
@@ -501,7 +501,7 @@
         "priority": 0,
         "parameters": {
           "value": 0.0,
-          "triggers_per_stack": 15,
+          "triggers_per_stack": 10,
           "value_per_stack": 0.02
         }
       }
@@ -539,7 +539,7 @@
   {
     "key": "vampire",
     "name": "嗜血",
-    "description": "每击杀一个普通或精英敌人，获得 +1人口",
+    "description": "每击杀一个普通或精英敌人，获得 +10人口",
     "rarity": "普通",
     "price": 3,
     "category": "survival",
@@ -558,7 +558,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 1
+          "value": 10
         }
       }
     ]
@@ -659,7 +659,7 @@
   {
     "key": "overclock",
     "name": "超频火控",
-    "description": "射速 +25%，伤害 -8%",
+    "description": "射速 +30%，伤害 -8%",
     "rarity": "罕见",
     "price": 6,
     "category": "fire_control",
@@ -678,7 +678,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 0.25
+          "value": 0.3
         }
       },
       {
@@ -807,8 +807,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 0.45,
-          "boss_kind": "big"
+          "value": 0.45
         }
       }
     ]
@@ -849,7 +848,7 @@
   {
     "key": "dividend",
     "name": "末日红利",
-    "description": "击杀Boss额外 +2金币和8人口",
+    "description": "击杀Boss额外 +20金币和264人口",
     "rarity": "稀有",
     "price": 10,
     "category": "economy",
@@ -868,7 +867,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 2
+          "value": 20
         }
       },
       {
@@ -885,7 +884,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 8
+          "value": 264
         }
       }
     ]
@@ -893,7 +892,7 @@
   {
     "key": "growth_damage",
     "name": "磨砺弹头",
-    "description": "每个世界基础伤害 +0.5",
+    "description": "每个世界基础伤害 +1",
     "rarity": "普通",
     "price": 3,
     "category": "growth",
@@ -912,7 +911,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 0.5
+          "value": 1.0
         }
       }
     ]
@@ -920,7 +919,7 @@
   {
     "key": "growth_fire",
     "name": "渐热枪机",
-    "description": "每进入一个新世界，射速 +3%",
+    "description": "每进入一个新世界，射速 +10%",
     "rarity": "稀有",
     "price": 10,
     "category": "growth",
@@ -939,7 +938,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 0.03
+          "value": 0.1
         }
       }
     ]
@@ -947,7 +946,7 @@
   {
     "key": "growth_population",
     "name": "人口储备",
-    "description": "每进入一个新世界，初始人口 +1",
+    "description": "每进入一个新世界，初始人口 +3",
     "rarity": "普通",
     "price": 3,
     "category": "growth",
@@ -966,7 +965,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 1
+          "value": 3
         }
       }
     ]
@@ -1030,7 +1029,7 @@
   {
     "key": "growth_arsenal",
     "name": "迭代军械",
-    "description": "每个世界伤害和射速各 +3%",
+    "description": "每个世界伤害和射速各 +6%",
     "rarity": "罕见",
     "price": 6,
     "category": "growth",
@@ -1049,7 +1048,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 0.03
+          "value": 0.06
         }
       },
       {
@@ -1066,7 +1065,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 0.03
+          "value": 0.06
         }
       }
     ]
@@ -1074,7 +1073,7 @@
   {
     "key": "growth_recovery",
     "name": "滚动征兵",
-    "description": "每个世界初始人口 +2，精英奖励 +1",
+    "description": "每个世界初始人口 +3，精英奖励 +25",
     "rarity": "罕见",
     "price": 6,
     "category": "growth",
@@ -1111,7 +1110,7 @@
         "priority": 0,
         "parameters": {
           "value": 0,
-          "per_world": 1
+          "per_world": 25
         }
       }
     ]
@@ -1119,7 +1118,7 @@
   {
     "key": "growth_core",
     "name": "世界核心",
-    "description": "每个世界伤害 +10%、射速 +5%、人口 +3",
+    "description": "每个世界伤害 +10%、射速 +5%、人口 +8",
     "rarity": "稀有",
     "price": 10,
     "category": "growth",
@@ -1172,7 +1171,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 3
+          "value": 8
         }
       }
     ]
@@ -1180,7 +1179,7 @@
   {
     "key": "boss_bounty",
     "name": "悬赏告示",
-    "description": "击杀任意Boss额外 +1金币",
+    "description": "击杀任意Boss额外 +3金币",
     "rarity": "普通",
     "price": 3,
     "category": "economy",
@@ -1199,7 +1198,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 1
+          "value": 3
         }
       }
     ]
@@ -1207,7 +1206,7 @@
   {
     "key": "special_profit",
     "name": "门票回收",
-    "description": "拾取特殊门额外 +1金币",
+    "description": "拾取特殊门额外 +2金币",
     "rarity": "普通",
     "price": 3,
     "category": "economy",
@@ -1226,7 +1225,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 1
+          "value": 2
         }
       }
     ]
@@ -1723,7 +1722,7 @@
   {
     "key": "heavy_ca",
     "name": "大口径",
-    "description": "提升巨量基础伤害(64)，+100%对门伤害，降低99%射速。射速补正+0.1。",
+    "description": "提升大量基础伤害(25)，+100%对门伤害，降低99%射速。射速补正+0.1。",
     "rarity": "罕见",
     "price": 6,
     "category": "damage",
@@ -1742,7 +1741,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": 64.0
+          "value": 20.0
         }
       },
       {
@@ -1760,23 +1759,6 @@
         "priority": 0,
         "parameters": {
           "value": -0.99
-        }
-      },
-      {
-        "targets": {
-          "player": false,
-          "enemies": [],
-          "gate": true
-        },
-        "trigger": "passive",
-        "action": "modify_stat",
-        "stat": "gate_damage",
-        "operator": "add_percent",
-        "stacking": "add",
-        "exclusive_group": "",
-        "priority": 0,
-        "parameters": {
-          "value": 1.0
         }
       },
       {
@@ -1963,9 +1945,9 @@
   {
     "key": "ramp_fire_pla",
     "name": "电浆发射器",
-    "description": "持续射击时每1秒射速 +50%，最多 +500%，松开后逐渐衰减；伤害和对门伤害-80%。",
+    "description": "持续射击时每1秒射速 +50%，最多 +500%，松开后逐渐衰减；伤害和对门伤害-50%。",
     "rarity": "稀有",
-    "price": 3,
+    "price": 10,
     "category": "fire_control",
     "effects": [
       {
@@ -2001,7 +1983,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": -0.8
+          "value": -0.5
         }
       },
       {
@@ -2018,7 +2000,7 @@
         "exclusive_group": "",
         "priority": 0,
         "parameters": {
-          "value": -0.8
+          "value": -0.5
         }
       }
     ]

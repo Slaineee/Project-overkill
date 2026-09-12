@@ -1,0 +1,2358 @@
+[
+  {
+    "key": "damage",
+    "name": "强化弹头",
+    "description": "基础伤害 +5",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "base_damage",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 5.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "fire_rate",
+    "name": "轻量机匣",
+    "description": "射速 +10%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1
+        }
+      }
+    ]
+  },
+  {
+    "key": "move_speed",
+    "name": "急行军",
+    "description": "移动速度 +10%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "move_speed",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1
+        }
+      }
+    ]
+  },
+  {
+    "key": "armor",
+    "name": "防护护目",
+    "description": "来自怪物与弹幕的人口损失 -20%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "population_loss_reduction",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.2
+        }
+      }
+    ]
+  },
+  {
+    "key": "recruit",
+    "name": "备用征召",
+    "description": "初始人口 +6",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "starting_population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 6
+        }
+      }
+    ]
+  },
+  {
+    "key": "low_population",
+    "name": "低人口韧性",
+    "description": "人口低于10时伤害 +100%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 1.0,
+          "condition_stat": "population",
+          "comparison": "less",
+          "condition_value": 10
+        }
+      }
+    ]
+  },
+  {
+    "key": "high_population",
+    "name": "高人口压制",
+    "description": "人口达到50时射速 +15%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.15,
+          "condition_stat": "population",
+          "comparison": "greater_equal",
+          "condition_value": 50
+        }
+      }
+    ]
+  },
+  {
+    "key": "fast_bullet",
+    "name": "稳定枪线",
+    "description": "子弹速度 +20%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "bullet_speed",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.2
+        }
+      }
+    ]
+  },
+  {
+    "key": "ramp_fire",
+    "name": "加长弹链",
+    "description": "持续射击时每秒射速 +5%，最多 +30%，松开后逐渐衰减",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "while_firing",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "value_per_second": 0.05,
+          "cap": 0.3
+        }
+      }
+    ]
+  },
+  {
+    "key": "warning",
+    "name": "预警雷达",
+    "description": "大Boss蓄力 +0.4秒",
+    "rarity": "普通",
+    "price": 3,
+    "category": "utility",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            8
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "boss_windup",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.4
+        }
+      }
+    ]
+  },
+  {
+    "key": "gate_damage",
+    "name": "拆门专家",
+    "description": "对所有门伤害 +30%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "gate",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "gate_damage",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.3
+        }
+      }
+    ]
+  },
+  {
+    "key": "soft_contact",
+    "name": "防线加固",
+    "description": "普通怪突破有35%概率不掉人",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            2
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "contact_avoid_chance",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.35
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_damage",
+    "name": "精英情报",
+    "description": "对精英伤害 +20%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            4
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "damage_taken",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.2
+        }
+      }
+    ]
+  },
+  {
+    "key": "runner",
+    "name": "游击射击",
+    "description": "移动时伤害 +12%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "while_moving",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.12
+        }
+      }
+    ]
+  },
+  {
+    "key": "population_fire",
+    "name": "人海枪阵",
+    "description": "每50人口获得 +0.1%射速，最多 +50%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "scale_stat": "population",
+          "step": 50,
+          "value_per_step": 0.001,
+          "cap": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "loss_rage",
+    "name": "人口换火",
+    "description": "受到怪物或弹幕伤害掉人后，伤害 +300%，持续5秒",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_population_loss",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 3.0,
+          "duration": 5.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "medicine",
+    "name": "备用医药",
+    "description": "每10秒增加2%人口",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "interval",
+        "action": "periodic_resource",
+        "stat": "population",
+        "operator": "multiply",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 2,
+          "interval": 10.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "kill_shot",
+    "name": "急速装填",
+    "description": "每击杀10个普通或精英敌人，获得 +2%射速",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_enemy_kill",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "triggers_per_stack": 10,
+          "value_per_stack": 0.02
+        }
+      }
+    ]
+  },
+  {
+    "key": "boss_damage",
+    "name": "集火分配",
+    "description": "对所有Boss伤害 +15%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            8
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "damage_taken",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.15
+        }
+      }
+    ]
+  },
+  {
+    "key": "vampire",
+    "name": "嗜血",
+    "description": "每击杀一个普通或精英敌人，获得 +10人口",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_enemy_kill",
+        "action": "grant_resource",
+        "stat": "population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 10
+        }
+      }
+    ]
+  },
+  {
+    "key": "rich_damage",
+    "name": "富有本能",
+    "description": "每10金币伤害 +5%",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "scale_stat": "gold",
+          "step": 10,
+          "value_per_step": 0.05
+        }
+      }
+    ]
+  },
+  {
+    "key": "still_shot",
+    "name": "冷静瞄准",
+    "description": "静止1秒伤害 +40%，之后每秒 +10%，最多+500%，移动清除",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "while_still",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "delay": 1.0,
+          "initial_value": 0.4,
+          "interval": 1.0,
+          "value_per_interval": 0.1,
+          "cap": 5.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "splash",
+    "name": "精准溅射",
+    "description": "命中普通或精英敌人时，对200范围内其他敌人造成25%伤害",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            2,
+            4
+          ],
+          "gate": false
+        },
+        "trigger": "on_hit",
+        "action": "splash_damage",
+        "stat": "splash_damage",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.25,
+          "radius": 200.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "overclock",
+    "name": "超频火控",
+    "description": "射速 +30%，伤害 -8%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.3
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": -0.08
+        }
+      }
+    ]
+  },
+  {
+    "key": "gate_master",
+    "name": "门之支配",
+    "description": "正数数字门收益 +30%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "gate",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "number_gate_reward",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.3
+        }
+      }
+    ]
+  },
+  {
+    "key": "execute",
+    "name": "精英处决",
+    "description": "命中生命值低于或等于50%的精英时直接斩杀",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            4
+          ],
+          "gate": false
+        },
+        "trigger": "on_hit",
+        "action": "execute",
+        "stat": "execute_threshold",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "threshold": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "pierce",
+    "name": "聚能特爆",
+    "description": "子弹额外穿透1个敌人或Boss；命中门时仍会消失",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "projectile_pierce",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 1
+        }
+      }
+    ]
+  },
+  {
+    "key": "decapitate",
+    "name": "斩首协议",
+    "description": "对Boss伤害 +45%",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            8
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "damage_taken",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.45
+        }
+      }
+    ]
+  },
+  {
+    "key": "resonance",
+    "name": "火力共振",
+    "description": "命中Boss时，所有场上普通和精英敌人受到25%同步伤害",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            2,
+            4
+          ],
+          "gate": false
+        },
+        "trigger": "on_hit",
+        "action": "splash_damage",
+        "stat": "splash_damage",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.25,
+          "radius": 0.0,
+          "global_effect": true,
+          "trigger_target": 8
+        }
+      }
+    ]
+  },
+  {
+    "key": "dividend",
+    "name": "末日红利",
+    "description": "击杀Boss额外 +20金币和264人口",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_boss_kill",
+        "action": "grant_resource",
+        "stat": "gold",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 20
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_boss_kill",
+        "action": "grant_resource",
+        "stat": "population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 264
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_damage",
+    "name": "磨砺弹头",
+    "description": "每个世界基础伤害 +1",
+    "rarity": "普通",
+    "price": 3,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "base_damage",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 1.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_fire",
+    "name": "渐热枪机",
+    "description": "每进入一个新世界，射速 +10%",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_population",
+    "name": "人口储备",
+    "description": "每进入一个新世界，初始人口 +3",
+    "rarity": "普通",
+    "price": 3,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "starting_population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 3
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_boss",
+    "name": "猎首经验",
+    "description": "每进入一个新世界，对Boss伤害 +5%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            8
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "damage_taken",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.05
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_gate",
+    "name": "破门课程",
+    "description": "每进入一个新世界，对门伤害 +10%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "gate_damage",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_arsenal",
+    "name": "迭代军械",
+    "description": "每个世界伤害和射速各 +6%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.06
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.06
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_recovery",
+    "name": "滚动征兵",
+    "description": "每个世界初始人口 +3，精英奖励 +25",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "starting_population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 2
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_elite_kill",
+        "action": "grant_resource",
+        "stat": "population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0,
+          "per_world": 25
+        }
+      }
+    ]
+  },
+  {
+    "key": "growth_core",
+    "name": "世界核心",
+    "description": "每个世界伤害 +10%、射速 +5%、人口 +8",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "growth",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.05
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "growth_modifier",
+        "stat": "starting_population",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 8
+        }
+      }
+    ]
+  },
+  {
+    "key": "boss_bounty",
+    "name": "悬赏告示",
+    "description": "击杀任意Boss额外 +3金币",
+    "rarity": "普通",
+    "price": 3,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_boss_kill",
+        "action": "grant_resource",
+        "stat": "gold",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 3
+        }
+      }
+    ]
+  },
+  {
+    "key": "special_profit",
+    "name": "门票回收",
+    "description": "拾取特殊门额外 +2金币",
+    "rarity": "普通",
+    "price": 3,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_gate_collect",
+        "action": "grant_resource",
+        "stat": "gold",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 2
+        }
+      }
+    ]
+  },
+  {
+    "key": "saving",
+    "name": "零钱罐",
+    "description": "每个世界通关时获得当前金币10%的利息，最多10金币",
+    "rarity": "普通",
+    "price": 3,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_world_complete",
+        "action": "grant_resource",
+        "stat": "gold",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1,
+          "cap": 10
+        }
+      }
+    ]
+  },
+  {
+    "key": "refresh_deal",
+    "name": "熟客折扣",
+    "description": "所有付费刷新费用 -1金币",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "refresh_cost",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": -1.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "card_deal",
+    "name": "批发许可",
+    "description": "购卡 -4金币，批发卡卖价为普通0/罕见1/稀有2",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "card_price",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": -4.0
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "wholesale_common_sale",
+        "operator": "set",
+        "stacking": "replace",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "wholesale_uncommon_sale",
+        "operator": "set",
+        "stacking": "replace",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 1
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "wholesale_rare_sale",
+        "operator": "set",
+        "stacking": "replace",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 2
+        }
+      }
+    ]
+  },
+  {
+    "key": "double_shot",
+    "name": "双管齐射",
+    "description": "同时发射2颗子弹，每颗造成65%伤害；齐射效果互斥",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "projectile_pattern",
+        "stat": "projectile_pattern",
+        "operator": "add_flat",
+        "stacking": "replace",
+        "exclusive_group": "volley",
+        "priority": 1,
+        "parameters": {
+          "count": 2,
+          "spread": 10.0,
+          "damage_scale": 0.65
+        }
+      }
+    ]
+  },
+  {
+    "key": "triple_shot",
+    "name": "三线火力",
+    "description": "同时发射3颗子弹，每颗造成50%伤害；优先于双管齐射",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "projectile_pattern",
+        "stat": "projectile_pattern",
+        "operator": "add_flat",
+        "stacking": "replace",
+        "exclusive_group": "volley",
+        "priority": 2,
+        "parameters": {
+          "count": 3,
+          "spread": 8.0,
+          "damage_scale": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "shotgun",
+    "name": "暴雨散弹",
+    "description": "同时发射5颗子弹，每颗造成38%伤害；优先于其他齐射",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "projectile_pattern",
+        "stat": "projectile_pattern",
+        "operator": "add_flat",
+        "stacking": "replace",
+        "exclusive_group": "volley",
+        "priority": 3,
+        "parameters": {
+          "count": 5,
+          "spread": 7.0,
+          "damage_scale": 0.38
+        }
+      }
+    ]
+  },
+  {
+    "key": "recruit_gate_bias",
+    "name": "征召信标",
+    "description": "征召门概率70%，其他特殊门各15%",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "gate",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "change_weight",
+        "stat": "damage_gate_weight",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.15
+        }
+      },
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "change_weight",
+        "stat": "fire_rate_gate_weight",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.15
+        }
+      },
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "change_weight",
+        "stat": "population_gate_weight",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.7
+        }
+      }
+    ]
+  },
+  {
+    "key": "critical_focus",
+    "name": "会心校准",
+    "description": "暴击率 +50%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "critical_chance",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "composure",
+    "name": "气定神闲",
+    "description": "停火0.15秒获得 +100%伤害和 +300%门伤害，之后每0.15秒再加 +50%和 +100%，开火后保留0.5秒",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "while_not_firing",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "initial_value": 1.0,
+          "value_per_interval": 0.5,
+          "delay": 0.15,
+          "interval": 0.15,
+          "linger": 0.5
+        }
+      },
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "while_not_firing",
+        "action": "modify_stat",
+        "stat": "gate_damage",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "initial_value": 3.0,
+          "value_per_interval": 1.0,
+          "delay": 0.15,
+          "interval": 0.15,
+          "linger": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "phase_move",
+    "name": "相位移动",
+    "description": "角色移动时视为静止，75%概率闪避小怪突破。",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "utility",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "set_rule",
+        "stat": "moving_counts_as_still",
+        "operator": "set",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "enabled": true
+        }
+      },
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            2
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "contact_avoid_chance",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 75.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "critical_chance",
+    "name": "会心训练",
+    "description": "暴击率 +25%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "critical_chance",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.25
+        }
+      }
+    ]
+  },
+  {
+    "key": "critical_power",
+    "name": "致命校正",
+    "description": "暴击伤害+100%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "critical_multiplier",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 1,
+        "parameters": {
+          "value": 1.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "pierce_plus",
+    "name": "相位贯穿",
+    "description": "子弹额外穿透5个敌人或Boss，可与聚能特爆叠加；不能穿门",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "projectile_pierce",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 5
+        }
+      }
+    ]
+  },
+  {
+    "key": "heavy_ca",
+    "name": "大口径",
+    "description": "提升大量基础伤害(20)，降低99%射速。射速补正+0.1。",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "base_damage",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 20.0
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": -0.99
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate_correction",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1
+        }
+      }
+    ]
+  },
+  {
+    "key": "match_tr",
+    "name": "竞赛级扳机",
+    "description": "射速补正+1。",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "fire_rate_correction",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 1,
+        "parameters": {
+          "value": 2.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "pierce_2",
+    "name": "全金属被甲弹",
+    "description": "子弹额外穿透3个敌人或Boss；命中门时仍会消失",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "projectile_pierce",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 3
+        }
+      }
+    ]
+  },
+  {
+    "key": "ricochet_1",
+    "name": "跳弹弹头",
+    "description": "子弹击中战场边缘或门时可反弹1次；命中敌人仍会消失，除非拥有穿透",
+    "rarity": "普通",
+    "price": 3,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "projectile_bounces",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "ricochet",
+        "priority": 1,
+        "parameters": {
+          "value": 1
+        }
+      }
+    ]
+  },
+  {
+    "key": "ricochet_2",
+    "name": "折射弹头",
+    "description": "子弹击中战场边缘或门时可反弹2次；命中敌人仍会消失，除非拥有穿透",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "projectile_bounces",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "ricochet",
+        "priority": 2,
+        "parameters": {
+          "value": 2
+        }
+      }
+    ]
+  },
+  {
+    "key": "ricochet_3",
+    "name": "回旋弹头",
+    "description": "子弹击中战场边缘或门时可反弹3次；命中敌人仍会消失，除非拥有穿透",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "projectile_bounces",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "ricochet",
+        "priority": 3,
+        "parameters": {
+          "value": 3
+        }
+      }
+    ]
+  },
+  {
+    "key": "damage_plus",
+    "name": "膛线",
+    "description": "基础伤害 +8",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "base_damage",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 8.0
+        }
+      }
+    ]
+  },
+  {
+    "key": "ramp_fire_pla",
+    "name": "电浆发射器",
+    "description": "持续射击时每1秒射速 +50%，最多 +500%，松开后逐渐衰减；伤害和对门伤害-50%。",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "while_firing",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "value_per_second": 0.5,
+          "cap": 5.0
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "base_damage",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": -0.5
+        }
+      },
+      {
+        "targets": {
+          "player": false,
+          "enemies": [],
+          "gate": true
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "gate_damage",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": -0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "critical_power_ultra",
+    "name": "死神之眼",
+    "description": "暴击率+25%，暴击伤害+50%",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "critical_multiplier",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 1,
+        "parameters": {
+          "value": 0.5
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "critical_chance",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.25
+        }
+      }
+    ]
+  },
+  {
+    "key": "critical_power_0",
+    "name": "弱点揭示",
+    "description": "暴击伤害+50%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "critical_multiplier",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 1,
+        "parameters": {
+          "value": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_hunt",
+    "name": "精英猎手",
+    "description": "击杀精英有20%概率获得1金币，精英出现频率提高50%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "economy",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_elite_kill",
+        "action": "grant_resource",
+        "stat": "gold",
+        "operator": "add_flat",
+        "stacking": "independent",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 1,
+          "chance": 0.2,
+          "message": "精英猎手：金币+1"
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "elite_spawn_interval",
+        "operator": "multiply",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.6667
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_adrenaline",
+    "name": "嗜血扳机",
+    "description": "击杀精英75%概率获得5秒射速+50%，精英出现频率+50%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "fire_control",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_elite_kill",
+        "action": "modify_stat",
+        "stat": "fire_rate",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.5,
+          "chance": 0.75,
+          "duration": 5.0,
+          "message": "嗜血扳机：射速+50%（5秒）"
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "elite_spawn_interval",
+        "operator": "multiply",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.6667
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_harvest",
+    "name": "精英收割",
+    "description": "击杀精英+10%当前人口，精英出现频率+50%",
+    "rarity": "罕见",
+    "price": 6,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_elite_kill",
+        "action": "grant_resource",
+        "stat": "population",
+        "operator": "add_percent",
+        "stacking": "independent",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.1,
+          "message": "精英收割：人口+10%"
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "elite_spawn_interval",
+        "operator": "multiply",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.6667
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_decree",
+    "name": "斩首令",
+    "description": "命中精英血量低于80%直接处决；击杀精英+4金币、本世界伤害+2%；精英频率+50%",
+    "rarity": "稀有",
+    "price": 10,
+    "category": "damage",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            4
+          ],
+          "gate": false
+        },
+        "trigger": "on_hit",
+        "action": "execute",
+        "stat": "execute_threshold",
+        "operator": "set",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "threshold": 0.8
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_elite_kill",
+        "action": "grant_resource",
+        "stat": "gold",
+        "operator": "add_flat",
+        "stacking": "independent",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 4,
+          "message": "斩首令：金币+4"
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "on_elite_kill",
+        "action": "modify_stat",
+        "stat": "damage_dealt",
+        "operator": "add_percent",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.0,
+          "stacks_per_trigger": 1,
+          "value_per_stack": 0.02,
+          "clear_on_world": true,
+          "message": "斩首令：本世界伤害+2%"
+        }
+      },
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "elite_spawn_interval",
+        "operator": "multiply",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.6667
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_bait",
+    "name": "精英诱饵",
+    "description": "精英出现频率+100%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "utility",
+    "effects": [
+      {
+        "targets": {
+          "player": true,
+          "enemies": [],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "elite_spawn_interval",
+        "operator": "multiply",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.5
+        }
+      }
+    ]
+  },
+  {
+    "key": "elite_armor",
+    "name": "精英护具",
+    "description": "精英突破免伤概率+25%",
+    "rarity": "普通",
+    "price": 3,
+    "category": "survival",
+    "effects": [
+      {
+        "targets": {
+          "player": false,
+          "enemies": [
+            4
+          ],
+          "gate": false
+        },
+        "trigger": "passive",
+        "action": "modify_stat",
+        "stat": "elite_contact_avoid_chance",
+        "operator": "add_flat",
+        "stacking": "add",
+        "exclusive_group": "",
+        "priority": 0,
+        "parameters": {
+          "value": 0.25
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "bgm_volume": 0.2,
+  "sfx_volume": 1.0,
+  "effect_volumes": {
+    "shot": 1.0,
+    "enemy_hit": 0.5,
+    "kill": 1.0,
+    "gate_hit": 0.2,
+    "gate_collect": 0.2,
+    "settlement": 1.0
+  },
+  "mouse_sensitivity": 0.4,
+  "player_center_offset": [
+    0.0,
+    0.0
+  ],
+  "gun_center_offset": [
+    0.0,
+    0.0
+  ],
+  "crosshair_preset": "void",
+  "shake_intensity": 1.0,
+  "glow_brightness": 0.6,
+  "glow_spread": 0.5,
+  "glow_opacity": 0.7,
+  "glow_feather": 0.2
+}

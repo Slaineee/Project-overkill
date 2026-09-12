@@ -142,5 +142,6 @@ def format_number(value: float) -> str:
         return f"{int(value):,}"
     if absolute < 100_000_000:
         return f"{value / 10_000:.1f}w"
-    yi = f"{value / 100_000_000:.1f}".rstrip("0").rstrip(".")
-    return f"{yi}亿"
+    exponent = int(math.floor(math.log10(absolute))) if absolute else 0
+    mantissa = f"{value / 10 ** exponent:.2f}".rstrip("0").rstrip(".")
+    return f"{mantissa}e{exponent}"

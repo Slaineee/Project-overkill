@@ -102,9 +102,9 @@ class LogicTests(unittest.TestCase):
     def test_number_format(self) -> None:
         self.assertEqual(format_number(9999), "9,999")
         self.assertEqual(format_number(12500), "1.2w")
-        self.assertEqual(format_number(100_000_000), "1亿")
-        self.assertEqual(format_number(world_dps_threshold(9)), "1.5亿")
-        self.assertEqual(format_number(world_dps_threshold(10)), "3亿")
+        self.assertEqual(format_number(100_000_000), "1e8")
+        self.assertEqual(format_number(world_dps_threshold(9)), "1.5e8")
+        self.assertEqual(format_number(world_dps_threshold(10)), "3e8")
 
     def test_boss_gold_scales_with_current_wallet(self) -> None:
         self.assertEqual(boss_gold_reward(4, 0), 4)
